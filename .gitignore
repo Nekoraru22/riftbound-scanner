@@ -7,3 +7,6 @@ venv/
 model/dataset.tar.gz
 model/dataset.tar.gz.sha256
 model/riftbound.db
+model/pictures
+model/runs
+public/models

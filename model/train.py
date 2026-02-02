@@ -23,16 +23,29 @@ REMOTE_RUNS_DIR = "/data/runs"
 
 
 @app.local_entrypoint()
-def main(skip_upload: bool = False):
+def main(skip_upload: bool = False, export_only: bool = False):
     """Sube el dataset local y lanza el entrenamiento en la nube.
 
     Uso:
         modal run train.py                  # Sube dataset + entrena
         modal run train.py --skip-upload    # Solo entrena (dataset ya subido)
+        modal run train.py --export-only    # Solo exporta y descarga (ya entrenado)
     """
     import pathlib
 
     base_dir = pathlib.Path(__file__).parent
+
+    if export_only:
+        print("Exportando modelo existente...")
+        export_model_fn.remote()
+
+        print("Descargando resultados...")
+        output_dir = base_dir / "runs"
+        output_dir.mkdir(exist_ok=True)
+        _download_results(output_dir)
+        print(f"Resultados guardados en {output_dir}")
+        _copy_model_to_public(base_dir)
+        return
 
     if not skip_upload:
         import hashlib
@@ -85,21 +98,72 @@ def main(skip_upload: bool = False):
 
     _download_results(output_dir)
     print(f"Resultados guardados en {output_dir}")
+    _copy_model_to_public(base_dir)
+
+
+def _copy_model_to_public(base_dir):
+    """Copia el modelo TF.js a public/models/ para la app web."""
+    import pathlib
+    import shutil
+
+    src = base_dir / "runs" / "train" / "weights" / "best_web_model"
+    dst = base_dir.parent / "public" / "models" / "yolo11n-obb-riftbound"
+
+    if not src.exists():
+        print(f"No se encontró {src}, saltando copia a public/")
+        return
+
+    if dst.exists():
+        shutil.rmtree(dst)
+    shutil.copytree(src, dst)
+    print(f"Modelo copiado a {dst}")
 
 
 def _download_results(local_dir):
     """Descarga los resultados del volumen."""
     import pathlib
 
-    for entry in volume.listdir(REMOTE_RUNS_DIR):
-        remote_path = f"{REMOTE_RUNS_DIR}/{entry.path}"
-        local_path = pathlib.Path(local_dir) / entry.path
+    volume_runs = "runs"
+
+    for entry in volume.listdir(volume_runs, recursive=True):
+        # entry.path ya incluye el prefijo "runs/", así que lo quitamos
+        # para evitar runs/runs/...
+        rel = entry.path
+        if rel.startswith("runs/"):
+            rel = rel[len("runs/"):]
+
+        local_path = pathlib.Path(local_dir) / rel
 
         if entry.type == modal.volume.FileEntryType.FILE:
             local_path.parent.mkdir(parents=True, exist_ok=True)
             with open(local_path, "wb") as f:
-                for chunk in volume.read_file(remote_path):
+                for chunk in volume.read_file(entry.path):
                     f.write(chunk)
+
+
+@app.function(
+    image=image,
+    gpu="T4",
+    timeout=600,
+    volumes={"/data": volume},
+)
+def export_model_fn():
+    """Exporta el modelo entrenado a TensorFlow.js."""
+    import os
+    from ultralytics import YOLO
+
+    volume.reload()
+
+    best_path = os.path.join(REMOTE_RUNS_DIR, "train", "weights", "best.pt")
+    if not os.path.exists(best_path):
+        raise FileNotFoundError(f"No se encontró {best_path}. Entrena primero.")
+
+    print("Exportando modelo a TensorFlow.js...")
+    model = YOLO(best_path)
+    model.export(format="tfjs", imgsz=640)
+
+    volume.commit()
+    print("Exportación completada.")
 
 
 @app.function(
@@ -162,7 +226,7 @@ names: ['card']
     model = YOLO("yolo11n-obb.pt")
     model.train(
         data=yaml_path,
-        epochs=100,
+        epochs=10,
         imgsz=640,
         batch=32,
         device=0,

@@ -30,7 +30,7 @@ class YOLODetector {
     this.model = null;
     this.state = DetectorState.UNLOADED;
     this.inputSize = 640; // YOLO11 default input size
-    this.confidenceThreshold = 0.5;
+    this.confidenceThreshold = 0.6;
     this.iouThreshold = 0.45;
     this.useSimulation = true; // Toggle for demo mode
     this._warmupComplete = false;
@@ -114,11 +114,25 @@ class YOLODetector {
   async _modelDetect(source) {
     const tf = window.tf;
 
-    // Preprocess: resize to inputSize, normalize to [0,1]
+    const srcW = source.width || source.videoWidth;
+    const srcH = source.height || source.videoHeight;
+
+    // Letterbox preprocess: maintain aspect ratio, pad with 114/255 gray
+    const scale = Math.min(this.inputSize / srcW, this.inputSize / srcH);
+    const newW = Math.round(srcW * scale);
+    const newH = Math.round(srcH * scale);
+    const padX = (this.inputSize - newW) / 2;
+    const padY = (this.inputSize - newH) / 2;
+
     const tensor = tf.tidy(() => {
       let img = tf.browser.fromPixels(source);
-      img = tf.image.resizeBilinear(img, [this.inputSize, this.inputSize]);
+      img = tf.image.resizeBilinear(img, [newH, newW]);
       img = img.toFloat().div(255.0);
+      const padTop = Math.floor(padY);
+      const padBottom = this.inputSize - newH - padTop;
+      const padLeft = Math.floor(padX);
+      const padRight = this.inputSize - newW - padLeft;
+      img = tf.pad(img, [[padTop, padBottom], [padLeft, padRight], [0, 0]], 0.4470588);
       return img.expandDims(0);
     });
 
@@ -127,23 +141,27 @@ class YOLODetector {
     tensor.dispose();
 
     // Post-process OBB outputs
-    // YOLO11 OBB output shape: [1, N, 7] where 7 = [cx, cy, w, h, angle, conf, class]
+    // YOLO11 OBB output shape: [1, 6, 8400] (transposed)
+    // 6 channels = [cx, cy, w, h, class_score, angle] (nc=1)
+    // 8400 = number of candidate detections
     const outputData = await predictions.data();
     predictions.dispose();
 
     const detections = [];
-    const numDetections = outputData.length / 7;
+    const numDetections = 8400;
 
     for (let i = 0; i < numDetections; i++) {
-      const offset = i * 7;
-      const conf = outputData[offset + 5];
+      // Data is laid out as [ch0_det0, ch0_det1, ..., ch1_det0, ch1_det1, ...]
+      // Channel 4 = class score (already sigmoid in model), Channel 5 = angle (already radians)
+      const conf = outputData[4 * numDetections + i];
 
       if (conf >= this.confidenceThreshold) {
-        const cx = outputData[offset] * source.width / this.inputSize;
-        const cy = outputData[offset + 1] * source.height / this.inputSize;
-        const w = outputData[offset + 2] * source.width / this.inputSize;
-        const h = outputData[offset + 3] * source.height / this.inputSize;
-        const angle = outputData[offset + 4];
+        // Map from letterbox space back to original image coords
+        const cx = (outputData[0 * numDetections + i] - padX) / scale;
+        const cy = (outputData[1 * numDetections + i] - padY) / scale;
+        const w = outputData[2 * numDetections + i] / scale;
+        const h = outputData[3 * numDetections + i] / scale;
+        const angle = outputData[5 * numDetections + i];
 
         const cropCanvas = this._cropRotated(source, cx, cy, w, h, angle);
 
@@ -272,7 +290,7 @@ class YOLODetector {
     ctx.save();
     ctx.translate(w / 2, h / 2);
     ctx.rotate(-angle);
-    ctx.drawImage(source, cx - w / 2, cy - h / 2, w, h, -w / 2, -h / 2, w, h);
+    ctx.drawImage(source, -cx, -cy);
     ctx.restore();
 
     return canvas;

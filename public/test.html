@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>YOLO OBB Test</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0"></script>
+  <style>
+    body { background: #111; color: #fff; font-family: monospace; margin: 20px; }
+    #canvas-container { position: relative; display: inline-block; }
+    canvas { max-width: 640px; }
+    #log { white-space: pre-wrap; margin-top: 20px; padding: 10px; background: #222; max-height: 400px; overflow-y: auto; }
+    button { padding: 8px 16px; margin: 5px; cursor: pointer; }
+    input[type=range] { width: 200px; vertical-align: middle; }
+    .controls { margin: 10px 0; }
+  </style>
+</head>
+<body>
+  <h2>YOLO11n-OBB Test</h2>
+  <div class="controls">
+    <input type="file" id="fileInput" accept="image/*">
+    <button id="runBtn" disabled>Run Detection</button>
+    <br>
+    <label>Confidence: <input type="range" id="confSlider" min="0.01" max="0.99" step="0.01" value="0.85">
+    <span id="confVal">0.85</span></label>
+    &nbsp;
+    <label>IoU: <input type="range" id="iouSlider" min="0.1" max="0.9" step="0.05" value="0.45">
+    <span id="iouVal">0.45</span></label>
+  </div>
+  <div id="canvas-container">
+    <canvas id="canvas"></canvas>
+  </div>
+  <div id="log">Loading model...</div>
+
+<script>
+const MODEL_URL = '/models/yolo11n-obb-riftbound/model.json';
+const INPUT_SIZE = 640;
+let model = null;
+let currentImage = null;
+let cardHashes = null; // { hashSize, cards: [{ id, name, set, hash, hashBytes }] }
+
+// --- Card Matcher (dHash) ---
+function hexToBytes(hex) {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2)
+    bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
+  return bytes;
+}
+
+function computeDHash(canvas, hashSize) {
+  const tmp = document.createElement('canvas');
+  tmp.width = hashSize + 1;
+  tmp.height = hashSize;
+  const tctx = tmp.getContext('2d');
+  tctx.drawImage(canvas, 0, 0, hashSize + 1, hashSize);
+  const data = tctx.getImageData(0, 0, hashSize + 1, hashSize).data;
+  const bits = [];
+  for (let y = 0; y < hashSize; y++) {
+    for (let x = 0; x < hashSize; x++) {
+      const i1 = (y * (hashSize + 1) + x) * 4;
+      const i2 = (y * (hashSize + 1) + x + 1) * 4;
+      const g1 = data[i1] * 0.299 + data[i1+1] * 0.587 + data[i1+2] * 0.114;
+      const g2 = data[i2] * 0.299 + data[i2+1] * 0.587 + data[i2+2] * 0.114;
+      bits.push(g2 > g1 ? 1 : 0);
+    }
+  }
+  const bytes = new Uint8Array(Math.ceil(bits.length / 8));
+  for (let i = 0; i < bits.length; i++)
+    if (bits[i]) bytes[i >> 3] |= (1 << (7 - (i & 7)));
+  return bytes;
+}
+
+function hammingDist(a, b) {
+  let d = 0;
+  for (let i = 0; i < a.length; i++) {
+    let x = a[i] ^ b[i];
+    while (x) { d += x & 1; x >>= 1; }
+  }
+  return d;
+}
+
+function centerCrop(canvas, ratio) {
+  // Crop the center portion to reduce background contamination
+  const cw = Math.round(canvas.width * ratio);
+  const ch = Math.round(canvas.height * ratio);
+  const ox = Math.round((canvas.width - cw) / 2);
+  const oy = Math.round((canvas.height - ch) / 2);
+  const tmp = document.createElement('canvas');
+  tmp.width = cw;
+  tmp.height = ch;
+  tmp.getContext('2d').drawImage(canvas, ox, oy, cw, ch, 0, 0, cw, ch);
+  return tmp;
+}
+
+function identifyCard(cropCanvas) {
+  if (!cardHashes) return null;
+  // Use center 60% to reduce background noise from imprecise OBB
+  const cropped = centerCrop(cropCanvas, 0.6);
+  const hash = computeDHash(cropped, cardHashes.hashSize);
+  const results = [];
+  for (const c of cardHashes.cards) {
+    const d = hammingDist(hash, c.hashBytes);
+    results.push({ card: c, distance: d });
+  }
+  results.sort((a, b) => a.distance - b.distance);
+  const totalBits = cardHashes.hashSize * cardHashes.hashSize;
+  const best = results[0];
+  return {
+    card: best.card,
+    distance: best.distance,
+    similarity: 1 - best.distance / totalBits,
+    top3: results.slice(0, 3).map(r => ({ name: r.card.name, set: r.card.set, sim: ((1 - r.distance / totalBits) * 100).toFixed(1) })),
+  };
+}
+
+function cropRotated(img, cx, cy, w, h, angle) {
+  const c = document.createElement('canvas');
+  c.width = Math.round(w);
+  c.height = Math.round(h);
+  const cctx = c.getContext('2d');
+  cctx.save();
+  // Move canvas origin to center, rotate to de-rotate the card, then draw full image
+  // so the card (centered at cx,cy in the original) appears axis-aligned
+  cctx.translate(w / 2, h / 2);
+  cctx.rotate(-angle);
+  cctx.drawImage(img, -cx, -cy);
+  cctx.restore();
+  return c;
+}
+
+// Load card hashes
+async function loadCardHashes() {
+  try {
+    const resp = await fetch('/card-hashes.json');
+    if (!resp.ok) { addLog('Card hashes not found (run hashCards.py first)'); return; }
+    const data = await resp.json();
+    data.cards.forEach(c => c.hashBytes = hexToBytes(c.hash));
+    cardHashes = data;
+    addLog(`Card hashes loaded: ${data.cards.length} cards`);
+  } catch (e) {
+    addLog('Could not load card hashes: ' + e.message);
+  }
+}
+
+const log = document.getElementById('log');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const confSlider = document.getElementById('confSlider');
+const confVal = document.getElementById('confVal');
+const iouSlider = document.getElementById('iouSlider');
+const iouVal = document.getElementById('iouVal');
+const runBtn = document.getElementById('runBtn');
+
+function addLog(msg) {
+  log.textContent += msg + '\n';
+  log.scrollTop = log.scrollHeight;
+}
+
+confSlider.oninput = () => confVal.textContent = confSlider.value;
+iouSlider.oninput = () => iouVal.textContent = iouSlider.value;
+
+// Load model
+async function loadModel() {
+  try {
+    model = await tf.loadGraphModel(MODEL_URL);
+    addLog('Model loaded OK');
+
+    // Warmup
+    const dummy = tf.zeros([1, INPUT_SIZE, INPUT_SIZE, 3]);
+    const warmup = model.predict(dummy);
+    const shape = warmup.shape;
+    addLog(`Output shape: [${shape}]`);
+    warmup.dispose();
+    dummy.dispose();
+
+    runBtn.disabled = false;
+    addLog('Ready. Select an image and click Run Detection.');
+  } catch (e) {
+    addLog('ERROR loading model: ' + e.message);
+  }
+}
+
+// Load image
+document.getElementById('fileInput').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const img = new Image();
+  img.onload = () => {
+    currentImage = img;
+    canvas.width = img.width;
+    canvas.height = img.height;
+    ctx.drawImage(img, 0, 0);
+    addLog(`Image loaded: ${img.width}x${img.height}`);
+  };
+  img.src = URL.createObjectURL(file);
+});
+
+// Run detection
+runBtn.addEventListener('click', async () => {
+  if (!model || !currentImage) return;
+  runBtn.disabled = true;
+
+  const confThreshold = parseFloat(confSlider.value);
+  const iouThreshold = parseFloat(iouSlider.value);
+  addLog(`\nRunning detection (conf=${confThreshold}, iou=${iouThreshold})...`);
+
+  const t0 = performance.now();
+
+  // Letterbox preprocess (maintain aspect ratio, pad with gray)
+  const imgW = currentImage.width;
+  const imgH = currentImage.height;
+  const scale = Math.min(INPUT_SIZE / imgW, INPUT_SIZE / imgH);
+  const newW = Math.round(imgW * scale);
+  const newH = Math.round(imgH * scale);
+  const padX = (INPUT_SIZE - newW) / 2;
+  const padY = (INPUT_SIZE - newH) / 2;
+
+  addLog(`Letterbox: scale=${scale.toFixed(4)}, newSize=${newW}x${newH}, pad=(${padX.toFixed(1)},${padY.toFixed(1)})`);
+
+  const tensor = tf.tidy(() => {
+    let img = tf.browser.fromPixels(currentImage);
+    img = tf.image.resizeBilinear(img, [newH, newW]);
+    img = img.toFloat().div(255.0);
+    // Pad to INPUT_SIZE x INPUT_SIZE
+    const padTop = Math.floor(padY);
+    const padBottom = INPUT_SIZE - newH - padTop;
+    const padLeft = Math.floor(padX);
+    const padRight = INPUT_SIZE - newW - padLeft;
+    img = tf.pad(img, [[padTop, padBottom], [padLeft, padRight], [0, 0]], 0.4470588); // 114/255
+    return img.expandDims(0);
+  });
+
+  // Inference
+  const predictions = model.predict(tensor);
+  tensor.dispose();
+
+  const outputData = await predictions.data();
+  const shape = predictions.shape;
+  predictions.dispose();
+
+  const t1 = performance.now();
+  addLog(`Inference: ${(t1 - t0).toFixed(1)}ms, output shape: [${shape}]`);
+
+  // Parse detections based on shape
+  const detections = [];
+  const numChannels = shape[1]; // 6
+  const numDets = shape[2];     // 8400
+
+  addLog(`Parsing ${numDets} candidates (${numChannels} channels)...`);
+
+  // Log raw value ranges for debugging
+  for (let ch = 0; ch < numChannels; ch++) {
+    let min = Infinity, max = -Infinity;
+    for (let i = 0; i < numDets; i++) {
+      const v = outputData[ch * numDets + i];
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    addLog(`  ch${ch}: min=${min.toFixed(4)}, max=${max.toFixed(4)}`);
+  }
+
+  for (let i = 0; i < numDets; i++) {
+    // Channel 4 = class score (already sigmoid in model), Channel 5 = angle (already radians)
+    const conf = outputData[4 * numDets + i];
+    if (conf >= confThreshold) {
+      // Map from letterbox 640x640 space back to original image coords
+      const rawCx = outputData[0 * numDets + i];
+      const rawCy = outputData[1 * numDets + i];
+      const rawW  = outputData[2 * numDets + i];
+      const rawH  = outputData[3 * numDets + i];
+      detections.push({
+        cx: (rawCx - padX) / scale,
+        cy: (rawCy - padY) / scale,
+        w:  rawW / scale,
+        h:  rawH / scale,
+        angle: outputData[5 * numDets + i],
+        conf,
+      });
+    }
+  }
+
+  addLog(`Detections above threshold: ${detections.length}`);
+
+  // NMS (now in original image coords)
+  detections.sort((a, b) => b.conf - a.conf);
+  const kept = [];
+  for (const det of detections) {
+    let dominated = false;
+    for (const k of kept) {
+      const ix1 = Math.max(det.cx - det.w/2, k.cx - k.w/2);
+      const iy1 = Math.max(det.cy - det.h/2, k.cy - k.h/2);
+      const ix2 = Math.min(det.cx + det.w/2, k.cx + k.w/2);
+      const iy2 = Math.min(det.cy + det.h/2, k.cy + k.h/2);
+      const inter = Math.max(0, ix2-ix1) * Math.max(0, iy2-iy1);
+      const union = det.w*det.h + k.w*k.h - inter;
+      if (union > 0 && inter/union > iouThreshold) { dominated = true; break; }
+    }
+    if (!dominated) kept.push(det);
+  }
+
+  addLog(`After NMS: ${kept.length} detections`);
+
+  // Draw (coordinates are already in original image space)
+  ctx.drawImage(currentImage, 0, 0);
+
+  for (let idx = 0; idx < kept.length; idx++) {
+    const det = kept[idx];
+    const cx = det.cx;
+    const cy = det.cy;
+    const w = det.w;
+    const h = det.h;
+    const angle = det.angle;
+
+    // Identify card via dHash matching
+    let label = `${(det.conf * 100).toFixed(1)}%`;
+    const crop = cropRotated(currentImage, cx, cy, w, h, angle);
+    const match = identifyCard(crop);
+    if (match) {
+      const top = match.top3.map(t => `${t.name}[${t.set}] ${t.sim}%`).join(' | ');
+      addLog(`  #${idx + 1} top3: ${top}`);
+      if (match.similarity > 0.55) {
+        label = `${match.card.name} (${(match.similarity * 100).toFixed(0)}%)`;
+      }
+    }
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(angle);
+    ctx.strokeStyle = `rgba(0, 255, 0, ${Math.min(1, det.conf + 0.3)})`;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(-w/2, -h/2, w, h);
+    // Label background
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    const textW = ctx.measureText(label).width + 8;
+    ctx.fillRect(-w/2, -h/2 - 22, textW, 20);
+    ctx.fillStyle = 'rgba(0, 255, 0, 0.9)';
+    ctx.font = '14px monospace';
+    ctx.fillText(label, -w/2 + 4, -h/2 - 6);
+    ctx.restore();
+  }
+
+  runBtn.disabled = false;
+});
+
+loadModel();
+loadCardHashes();
+</script>
+</body>
+</html>
