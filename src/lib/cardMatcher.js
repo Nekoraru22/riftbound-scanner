@@ -1,8 +1,8 @@
 /**
- * Card Matcher - Identifies detected cards by comparing perceptual hashes.
+ * Card Matcher - Identifies detected cards using color grid features + cosine similarity.
  *
- * Uses dHash (difference hash) to match cropped card detections
- * against pre-computed hashes from the card database.
+ * Each card in the DB has an 8x8 RGB color grid (192 features).
+ * Detected crops are resized to the same grid and compared via cosine similarity.
  */
 
 const HASHES_URL = '/card-hashes.json';
@@ -10,108 +10,73 @@ const HASHES_URL = '/card-hashes.json';
 class CardMatcher {
   constructor() {
     this.cards = [];
-    this.hashSize = 16;
+    this.gridSize = 8;
     this.ready = false;
   }
 
   async initialize() {
     const resp = await fetch(HASHES_URL);
-    if (!resp.ok) throw new Error(`Failed to load card hashes: ${resp.status}`);
+    if (!resp.ok) throw new Error(`Failed to load card DB: ${resp.status}`);
     const data = await resp.json();
-    this.hashSize = data.hashSize;
+    this.gridSize = data.gridSize;
     this.cards = data.cards.map(c => ({
       ...c,
-      hashBytes: this._hexToBytes(c.hash),
+      f: new Float32Array(c.f),
     }));
     this.ready = true;
-    console.log(`[CardMatcher] Loaded ${this.cards.length} card hashes`);
+    console.log(`[CardMatcher] Loaded ${this.cards.length} cards (${this.gridSize}x${this.gridSize} grid)`);
   }
 
   /**
    * Identify a card from a cropped canvas.
    * @param {HTMLCanvasElement} cropCanvas - De-rotated card crop
-   * @returns {{ card: object, distance: number, confidence: number } | null}
+   * @returns {{ card: object, similarity: number } | null}
    */
   identify(cropCanvas) {
     if (!this.ready || this.cards.length === 0) return null;
 
-    const hash = this._computeDHash(cropCanvas);
-    let bestDist = Infinity;
+    const features = this._computeColorGrid(cropCanvas);
+    let bestSim = -1;
     let bestCard = null;
 
     for (const card of this.cards) {
-      const dist = this._hammingDistance(hash, card.hashBytes);
-      if (dist < bestDist) {
-        bestDist = dist;
+      const sim = this._cosineSimilarity(features, card.f);
+      if (sim > bestSim) {
+        bestSim = sim;
         bestCard = card;
       }
     }
 
-    const totalBits = this.hashSize * this.hashSize;
-    const confidence = 1 - (bestDist / totalBits);
-
     return {
       card: bestCard,
-      distance: bestDist,
-      confidence,
+      similarity: bestSim,
     };
   }
 
-  /**
-   * Compute dHash from a canvas element.
-   */
-  _computeDHash(canvas) {
-    const size = this.hashSize;
-    // Draw to a small temporary canvas for resizing
+  _computeColorGrid(canvas) {
     const tmp = document.createElement('canvas');
-    tmp.width = size + 1;
-    tmp.height = size;
-    const ctx = tmp.getContext('2d');
-    ctx.drawImage(canvas, 0, 0, size + 1, size);
-
-    const imgData = ctx.getImageData(0, 0, size + 1, size);
-    const data = imgData.data;
-
-    // Convert to grayscale and compute horizontal differences
-    const bits = [];
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        const idx1 = (y * (size + 1) + x) * 4;
-        const idx2 = (y * (size + 1) + x + 1) * 4;
-        const gray1 = data[idx1] * 0.299 + data[idx1 + 1] * 0.587 + data[idx1 + 2] * 0.114;
-        const gray2 = data[idx2] * 0.299 + data[idx2 + 1] * 0.587 + data[idx2 + 2] * 0.114;
-        bits.push(gray2 > gray1 ? 1 : 0);
-      }
+    tmp.width = this.gridSize;
+    tmp.height = this.gridSize;
+    tmp.getContext('2d').drawImage(canvas, 0, 0, this.gridSize, this.gridSize);
+    const data = tmp.getContext('2d').getImageData(0, 0, this.gridSize, this.gridSize).data;
+    const features = new Float32Array(this.gridSize * this.gridSize * 3);
+    for (let i = 0, j = 0; i < data.length; i += 4) {
+      features[j++] = data[i] / 255;
+      features[j++] = data[i + 1] / 255;
+      features[j++] = data[i + 2] / 255;
     }
-
-    // Pack bits into bytes
-    const bytes = new Uint8Array(Math.ceil(bits.length / 8));
-    for (let i = 0; i < bits.length; i++) {
-      if (bits[i]) {
-        bytes[i >> 3] |= (1 << (7 - (i & 7)));
-      }
-    }
-    return bytes;
+    return features;
   }
 
-  _hammingDistance(a, b) {
-    let dist = 0;
+  _cosineSimilarity(a, b) {
+    let dot = 0, normA = 0, normB = 0;
     for (let i = 0; i < a.length; i++) {
-      let xor = a[i] ^ b[i];
-      while (xor) {
-        dist += xor & 1;
-        xor >>= 1;
-      }
+      dot += a[i] * b[i];
+      normA += a[i] * a[i];
+      normB += b[i] * b[i];
     }
-    return dist;
-  }
-
-  _hexToBytes(hex) {
-    const bytes = new Uint8Array(hex.length / 2);
-    for (let i = 0; i < hex.length; i += 2) {
-      bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
-    }
-    return bytes;
+    const denom = Math.sqrt(normA) * Math.sqrt(normB);
+    return denom > 0 ? dot / denom : 0;
   }
 }
 

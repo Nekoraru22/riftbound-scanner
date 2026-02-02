@@ -282,17 +282,34 @@ class YOLODetector {
    * Crop and de-rotate a detected card from the source
    */
   _cropRotated(source, cx, cy, w, h, angle) {
+    // Rotate full image so card is axis-aligned, then crop card region
+    const diag = Math.sqrt(source.width * source.width + source.height * source.height);
+    const big = document.createElement('canvas');
+    big.width = Math.ceil(diag);
+    big.height = Math.ceil(diag);
+    const bctx = big.getContext('2d');
+    const bcx = big.width / 2;
+    const bcy = big.height / 2;
+    bctx.translate(bcx, bcy);
+    bctx.rotate(-angle);
+    bctx.drawImage(source, -cx, -cy);
+
     const canvas = document.createElement('canvas');
     canvas.width = Math.round(w);
     canvas.height = Math.round(h);
-    const ctx = canvas.getContext('2d');
+    canvas.getContext('2d').drawImage(big, bcx - w / 2, bcy - h / 2, w, h, 0, 0, w, h);
 
-    ctx.save();
-    ctx.translate(w / 2, h / 2);
-    ctx.rotate(-angle);
-    ctx.drawImage(source, -cx, -cy);
-    ctx.restore();
-
+    // If landscape, rotate to portrait (cards are portrait by default)
+    if (w > h) {
+      const rot = document.createElement('canvas');
+      rot.width = Math.round(h);
+      rot.height = Math.round(w);
+      const rctx = rot.getContext('2d');
+      rctx.translate(rot.width / 2, rot.height / 2);
+      rctx.rotate(Math.PI / 2);
+      rctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
+      return rot;
+    }
     return canvas;
   }
 

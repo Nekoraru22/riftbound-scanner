@@ -29,6 +29,7 @@
   <div id="canvas-container">
     <canvas id="canvas"></canvas>
   </div>
+  <div id="crops" style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap;"></div>
   <div id="log">Loading model...</div>
 
 <script>
@@ -36,94 +37,101 @@ const MODEL_URL = '/models/yolo11n-obb-riftbound/model.json';
 const INPUT_SIZE = 640;
 let model = null;
 let currentImage = null;
-let cardHashes = null; // { hashSize, cards: [{ id, name, set, hash, hashBytes }] }
+let cardDB = null; // { gridSize, cards: [{ id, name, set, f: Float32Array }] }
 
-// --- Card Matcher (dHash) ---
-function hexToBytes(hex) {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2)
-    bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
-  return bytes;
-}
-
-function computeDHash(canvas, hashSize) {
+// --- Card Matcher (color grid + cosine similarity) ---
+function computeColorGrid(canvas, gridSize) {
   const tmp = document.createElement('canvas');
-  tmp.width = hashSize + 1;
-  tmp.height = hashSize;
-  const tctx = tmp.getContext('2d');
-  tctx.drawImage(canvas, 0, 0, hashSize + 1, hashSize);
-  const data = tctx.getImageData(0, 0, hashSize + 1, hashSize).data;
-  const bits = [];
-  for (let y = 0; y < hashSize; y++) {
-    for (let x = 0; x < hashSize; x++) {
-      const i1 = (y * (hashSize + 1) + x) * 4;
-      const i2 = (y * (hashSize + 1) + x + 1) * 4;
-      const g1 = data[i1] * 0.299 + data[i1+1] * 0.587 + data[i1+2] * 0.114;
-      const g2 = data[i2] * 0.299 + data[i2+1] * 0.587 + data[i2+2] * 0.114;
-      bits.push(g2 > g1 ? 1 : 0);
-    }
+  tmp.width = gridSize;
+  tmp.height = gridSize;
+  tmp.getContext('2d').drawImage(canvas, 0, 0, gridSize, gridSize);
+  const data = tmp.getContext('2d').getImageData(0, 0, gridSize, gridSize).data;
+  const features = new Float32Array(gridSize * gridSize * 3);
+  for (let i = 0, j = 0; i < data.length; i += 4) {
+    features[j++] = data[i] / 255;       // R
+    features[j++] = data[i + 1] / 255;   // G
+    features[j++] = data[i + 2] / 255;   // B
   }
-  const bytes = new Uint8Array(Math.ceil(bits.length / 8));
-  for (let i = 0; i < bits.length; i++)
-    if (bits[i]) bytes[i >> 3] |= (1 << (7 - (i & 7)));
-  return bytes;
+  return features;
 }
 
-function hammingDist(a, b) {
-  let d = 0;
+function cosineSimilarity(a, b) {
+  let dot = 0, normA = 0, normB = 0;
   for (let i = 0; i < a.length; i++) {
-    let x = a[i] ^ b[i];
-    while (x) { d += x & 1; x >>= 1; }
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
   }
-  return d;
+  const denom = Math.sqrt(normA) * Math.sqrt(normB);
+  return denom > 0 ? dot / denom : 0;
 }
 
-function centerCrop(canvas, ratio) {
-  // Crop the center portion to reduce background contamination
-  const cw = Math.round(canvas.width * ratio);
-  const ch = Math.round(canvas.height * ratio);
-  const ox = Math.round((canvas.width - cw) / 2);
-  const oy = Math.round((canvas.height - ch) / 2);
-  const tmp = document.createElement('canvas');
-  tmp.width = cw;
-  tmp.height = ch;
-  tmp.getContext('2d').drawImage(canvas, ox, oy, cw, ch, 0, 0, cw, ch);
-  return tmp;
+function rotateCanvas90(canvas) {
+  const rot = document.createElement('canvas');
+  rot.width = canvas.height;
+  rot.height = canvas.width;
+  const rctx = rot.getContext('2d');
+  rctx.translate(rot.width / 2, rot.height / 2);
+  rctx.rotate(Math.PI / 2);
+  rctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
+  return rot;
 }
 
 function identifyCard(cropCanvas) {
-  if (!cardHashes) return null;
-  // Use center 60% to reduce background noise from imprecise OBB
-  const cropped = centerCrop(cropCanvas, 0.6);
-  const hash = computeDHash(cropped, cardHashes.hashSize);
-  const results = [];
-  for (const c of cardHashes.cards) {
-    const d = hammingDist(hash, c.hashBytes);
-    results.push({ card: c, distance: d });
+  if (!cardDB) return null;
+  // Try both orientations and pick the best match
+  const featNormal = computeColorGrid(cropCanvas, cardDB.gridSize);
+  const rotated = rotateCanvas90(cropCanvas);
+  const featRotated = computeColorGrid(rotated, cardDB.gridSize);
+
+  let bestSim = -1, bestCard = null;
+  const scores = [];
+  for (const c of cardDB.cards) {
+    const s1 = cosineSimilarity(featNormal, c.f);
+    const s2 = cosineSimilarity(featRotated, c.f);
+    const sim = Math.max(s1, s2);
+    if (sim > bestSim) { bestSim = sim; bestCard = c; }
+    scores.push({ card: c, similarity: sim });
   }
-  results.sort((a, b) => a.distance - b.distance);
-  const totalBits = cardHashes.hashSize * cardHashes.hashSize;
-  const best = results[0];
+  scores.sort((a, b) => b.similarity - a.similarity);
   return {
-    card: best.card,
-    distance: best.distance,
-    similarity: 1 - best.distance / totalBits,
-    top3: results.slice(0, 3).map(r => ({ name: r.card.name, set: r.card.set, sim: ((1 - r.distance / totalBits) * 100).toFixed(1) })),
+    card: bestCard,
+    similarity: bestSim,
+    top3: scores.slice(0, 3).map(r => ({ name: r.card.name, set: r.card.set, sim: (r.similarity * 100).toFixed(1) })),
   };
 }
 
 function cropRotated(img, cx, cy, w, h, angle) {
+  // Step 1: Draw full image rotated around the card center onto a large temp canvas
+  // so the card appears axis-aligned
+  const diag = Math.sqrt(img.width * img.width + img.height * img.height);
+  const big = document.createElement('canvas');
+  big.width = Math.ceil(diag);
+  big.height = Math.ceil(diag);
+  const bctx = big.getContext('2d');
+  const bcx = big.width / 2;
+  const bcy = big.height / 2;
+  bctx.translate(bcx, bcy);
+  bctx.rotate(-angle);
+  bctx.drawImage(img, -cx, -cy);
+
+  // Step 2: Crop the card-sized region from center of the big canvas
   const c = document.createElement('canvas');
   c.width = Math.round(w);
   c.height = Math.round(h);
-  const cctx = c.getContext('2d');
-  cctx.save();
-  // Move canvas origin to center, rotate to de-rotate the card, then draw full image
-  // so the card (centered at cx,cy in the original) appears axis-aligned
-  cctx.translate(w / 2, h / 2);
-  cctx.rotate(-angle);
-  cctx.drawImage(img, -cx, -cy);
-  cctx.restore();
+  c.getContext('2d').drawImage(big, bcx - w / 2, bcy - h / 2, w, h, 0, 0, w, h);
+
+  // Step 3: If landscape, rotate to portrait (cards are portrait by default)
+  if (w > h) {
+    const rot = document.createElement('canvas');
+    rot.width = Math.round(h);
+    rot.height = Math.round(w);
+    const rctx = rot.getContext('2d');
+    rctx.translate(rot.width / 2, rot.height / 2);
+    rctx.rotate(Math.PI / 2);
+    rctx.drawImage(c, -c.width / 2, -c.height / 2);
+    return rot;
+  }
   return c;
 }
 
@@ -133,11 +141,11 @@ async function loadCardHashes() {
     const resp = await fetch('/card-hashes.json');
     if (!resp.ok) { addLog('Card hashes not found (run hashCards.py first)'); return; }
     const data = await resp.json();
-    data.cards.forEach(c => c.hashBytes = hexToBytes(c.hash));
-    cardHashes = data;
-    addLog(`Card hashes loaded: ${data.cards.length} cards`);
+    data.cards.forEach(c => { c.f = new Float32Array(c.f); });
+    cardDB = data;
+    addLog(`Card DB loaded: ${data.cards.length} cards (${data.gridSize}x${data.gridSize} color grid)`);
   } catch (e) {
-    addLog('Could not load card hashes: ' + e.message);
+    addLog('Could not load card DB: ' + e.message);
   }
 }
 
@@ -302,6 +310,10 @@ runBtn.addEventListener('click', async () => {
   // Draw (coordinates are already in original image space)
   ctx.drawImage(currentImage, 0, 0);
 
+  // Clear crop debug area
+  const cropsDiv = document.getElementById('crops');
+  cropsDiv.innerHTML = '';
+
   for (let idx = 0; idx < kept.length; idx++) {
     const det = kept[idx];
     const cx = det.cx;
@@ -310,10 +322,25 @@ runBtn.addEventListener('click', async () => {
     const h = det.h;
     const angle = det.angle;
 
-    // Identify card via dHash matching
+    // Identify card via color grid matching
     let label = `${(det.conf * 100).toFixed(1)}%`;
     const crop = cropRotated(currentImage, cx, cy, w, h, angle);
     const match = identifyCard(crop);
+
+    // Show crop for debugging
+    const cropPreview = document.createElement('div');
+    cropPreview.style.cssText = 'text-align:center; font-size:11px;';
+    const preview = document.createElement('canvas');
+    const pH = 150;
+    const pW = Math.round(pH * crop.width / crop.height);
+    preview.width = pW; preview.height = pH;
+    preview.getContext('2d').drawImage(crop, 0, 0, pW, pH);
+    preview.style.border = '1px solid #0f0';
+    cropPreview.appendChild(preview);
+    cropPreview.appendChild(document.createTextNode(
+      `#${idx+1} ${match ? match.top3[0].name : '?'}`
+    ));
+    cropsDiv.appendChild(cropPreview);
     if (match) {
       const top = match.top3.map(t => `${t.name}[${t.set}] ${t.sim}%`).join(' | ');
       addLog(`  #${idx + 1} top3: ${top}`);

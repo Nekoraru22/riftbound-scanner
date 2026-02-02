@@ -1,6 +1,7 @@
 """
-Pre-computes perceptual hashes (dHash) for all Riftbound cards.
-Outputs a JSON file that the web app loads for card identification.
+Pre-computes color grid features for all Riftbound cards.
+Each card is resized to a grid and average RGB values are stored.
+This is more robust than perceptual hashing for matching noisy crops.
 
 Usage:
     python hashCards.py
@@ -17,27 +18,25 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "riftbound.db")
 OUTPUT_PATH = os.path.join(BASE_DIR, "..", "public", "card-hashes.json")
 
-HASH_SIZE = 16  # 16x16 = 256-bit hash for good accuracy
+GRID_SIZE = 8  # 8x8 grid = 192 features (64 cells * 3 RGB channels)
 
 
-def dhash(image: np.ndarray, hash_size: int = HASH_SIZE) -> str:
-    """Compute difference hash of an image. Returns hex string."""
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    resized = cv2.resize(gray, (hash_size + 1, hash_size), interpolation=cv2.INTER_AREA)
-    # Compare adjacent pixels horizontally
-    diff = resized[:, 1:] > resized[:, :-1]
-    # Pack bits into hex string
-    bits = diff.flatten()
-    # Pack into bytes
-    byte_array = np.packbits(bits)
-    return byte_array.tobytes().hex()
+def compute_color_grid(image: np.ndarray, grid_size: int = GRID_SIZE) -> list[float]:
+    """Resize image to grid_size x grid_size and return flattened normalized RGB."""
+    # Resize to grid using INTER_AREA for good downsampling
+    small = cv2.resize(image, (grid_size, grid_size), interpolation=cv2.INTER_AREA)
+    # Convert BGR to RGB
+    small = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+    # Normalize to [0, 1] and flatten
+    features = small.astype(np.float32).flatten() / 255.0
+    return [round(float(v), 4) for v in features]
 
 
 def main():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT id, name, collector_number, set_id, set_name, rarity, card_type, image_path FROM cards"
+        "SELECT id, name, collector_number, set_id, set_name, rarity, card_type, orientation, image_path FROM cards"
     ).fetchall()
     conn.close()
 
@@ -55,7 +54,7 @@ def main():
             skipped += 1
             continue
 
-        h = dhash(img)
+        features = compute_color_grid(img)
 
         cards.append({
             "id": row["id"],
@@ -65,17 +64,18 @@ def main():
             "setName": row["set_name"],
             "rarity": row["rarity"],
             "type": row["card_type"],
-            "hash": h,
+            "orientation": row["orientation"],
+            "f": features,
         })
 
-    # Sort by set + collector number for consistency
     cards.sort(key=lambda c: (c["set"], c["number"]))
 
     os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
     with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
-        json.dump({"hashSize": HASH_SIZE, "cards": cards}, f, ensure_ascii=False)
+        json.dump({"gridSize": GRID_SIZE, "cards": cards}, f, ensure_ascii=False)
 
-    print(f"Hashed {len(cards)} cards ({skipped} skipped)")
+    print(f"Processed {len(cards)} cards ({skipped} skipped)")
+    print(f"Features per card: {GRID_SIZE}x{GRID_SIZE}x3 = {GRID_SIZE*GRID_SIZE*3}")
     print(f"Output: {os.path.abspath(OUTPUT_PATH)}")
 
 
