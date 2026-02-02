@@ -1,0 +1,7 @@
+modal
+requests
+beautifulsoup4
+tqdm
+Pillow
+numpy
+opencv-python

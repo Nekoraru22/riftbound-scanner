@@ -1,1 +1,9 @@
+__pycache__/
 node_modules/
+model/backgrounds
+model/cards
+model/dataset
+venv/
+model/dataset.tar.gz
+model/dataset.tar.gz.sha256
+model/riftbound.db
