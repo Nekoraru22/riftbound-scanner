@@ -298,18 +298,6 @@ class YOLODetector {
     canvas.width = Math.round(w);
     canvas.height = Math.round(h);
     canvas.getContext('2d').drawImage(big, bcx - w / 2, bcy - h / 2, w, h, 0, 0, w, h);
-
-    // If landscape, rotate to portrait (cards are portrait by default)
-    if (w > h) {
-      const rot = document.createElement('canvas');
-      rot.width = Math.round(h);
-      rot.height = Math.round(w);
-      const rctx = rot.getContext('2d');
-      rctx.translate(rot.width / 2, rot.height / 2);
-      rctx.rotate(Math.PI / 2);
-      rctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
-      return rot;
-    }
     return canvas;
   }
 

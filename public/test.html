@@ -121,7 +121,7 @@ function cropRotated(img, cx, cy, w, h, angle) {
   c.height = Math.round(h);
   c.getContext('2d').drawImage(big, bcx - w / 2, bcy - h / 2, w, h, 0, 0, w, h);
 
-  // Step 3: If landscape, rotate to portrait (cards are portrait by default)
+  // Step 3: If landscape, rotate to portrait for display
   if (w > h) {
     const rot = document.createElement('canvas');
     rot.width = Math.round(h);

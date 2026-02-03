@@ -148,7 +148,6 @@ def _download_results(local_dir):
     volumes={"/data": volume},
 )
 def export_model_fn():
-    """Exporta el modelo entrenado a TensorFlow.js."""
     import os
     from ultralytics import YOLO
 
@@ -160,7 +159,9 @@ def export_model_fn():
 
     print("Exportando modelo a TensorFlow.js...")
     model = YOLO(best_path)
-    model.export(format="tfjs", imgsz=640)
+    
+    # IMPORTANTE: device='cpu' evita errores de drivers y opset=12 es más compatible
+    model.export(format="tfjs", imgsz=640, device="cpu", opset=12)
 
     volume.commit()
     print("Exportación completada.")

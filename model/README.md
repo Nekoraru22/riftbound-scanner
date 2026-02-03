@@ -3,11 +3,17 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 python scraper.py
-python trainCreator.py
+python dataCreator.py
 
-modal run .\train.py
-modal run .\train.py --export-only
+modal run --detach .\train.py
+modal run --detach .\train.py --export-only
+# --detach para que se ejecute en segundo plano
+# --export-only para exportar los resultados sin entrenar
 
 
 npm install
 npm run dev
+
+
+# TODO
+La calidad de la cámara en la web igual es demasiado alta para el entrenamiento del modelo, reduce la resolución de la cámara.
