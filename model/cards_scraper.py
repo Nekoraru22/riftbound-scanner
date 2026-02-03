@@ -5,6 +5,9 @@ import json
 import sqlite3
 import requests
 
+import cv2
+import numpy as np
+from PIL import Image
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -12,7 +15,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "riftbound.db")
 CARDS_DIR = os.path.join(BASE_DIR, "cards")
+HASHES_PATH = os.path.join(BASE_DIR, "..", "public", "card-hashes.json")
 GALLERY_URL = "https://riftbound.leagueoflegends.com/en-us/card-gallery/"
+
+GRID_SIZE = 8 # 8x8 grid = 192 features (64 cells * 3 RGB channels)
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -388,6 +394,112 @@ def download_images(cards: list[dict]) -> None:
     print(f"Download complete. Skipped: {skipped}, Failed: {failed}")
 
 
+def rotate_landscape_images() -> int:
+    """
+    Rotates all landscape (horizontal) images to portrait (vertical) orientation.
+
+    Card images should be in portrait orientation for consistent processing.
+    This function finds all landscape images in the cards directory and
+    rotates them 90 degrees counter-clockwise.
+
+    Returns:
+        The number of images that were rotated.
+    """
+    if not os.path.exists(CARDS_DIR):
+        return 0
+
+    extensions = (".png", ".jpg", ".jpeg", ".webp")
+    rotated_count = 0
+
+    files = [f for f in os.listdir(CARDS_DIR) if f.lower().endswith(extensions)]
+
+    for filename in tqdm(files, desc="Checking orientations"):
+        filepath = os.path.join(CARDS_DIR, filename)
+        try:
+            with Image.open(filepath) as img:
+                width, height = img.size
+                if width > height:
+                    rotated = img.rotate(90, expand=True)
+                    rotated.save(filepath)
+                    rotated_count += 1
+        except Exception:
+            pass
+
+    if rotated_count > 0:
+        print(f"Rotated {rotated_count} landscape images to portrait")
+
+    return rotated_count
+
+
+def _compute_color_grid(image: np.ndarray, grid_size: int = GRID_SIZE) -> list[float]:
+    """
+    Resizes an image to a grid and returns flattened normalized RGB values.
+
+    Arguments:
+        image: The input image as a numpy array (BGR format from cv2).
+        grid_size: The size of the output grid (default 8x8).
+
+    Returns:
+        A list of normalized RGB values (0-1) for each grid cell.
+    """
+    small = cv2.resize(image, (grid_size, grid_size), interpolation=cv2.INTER_AREA)
+    small = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+    features = small.astype(np.float32).flatten() / 255.0
+    return [round(float(v), 4) for v in features]
+
+
+def generate_card_hashes() -> None:
+    """
+    Generates color grid hashes for all cards and saves them to a JSON file.
+
+    Reads card metadata from the database, computes color grid features for
+    each card image, and saves the results to a JSON file for use by the
+    frontend card matcher.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT id, name, collector_number, set_id, set_name, rarity, card_type, orientation, image_path FROM cards"
+    ).fetchall()
+    conn.close()
+
+    cards = []
+    skipped = 0
+
+    for row in tqdm(rows, desc="Generating hashes"):
+        img_path = os.path.join(BASE_DIR, row["image_path"])
+        if not os.path.exists(img_path):
+            skipped += 1
+            continue
+
+        img = cv2.imread(img_path)
+        if img is None:
+            skipped += 1
+            continue
+
+        features = _compute_color_grid(img)
+
+        cards.append({
+            "id": row["id"],
+            "name": row["name"],
+            "number": row["collector_number"],
+            "set": row["set_id"],
+            "setName": row["set_name"],
+            "rarity": row["rarity"],
+            "type": row["card_type"],
+            "orientation": row["orientation"],
+            "f": features,
+        })
+
+    cards.sort(key=lambda c: (c["set"], c["number"]))
+
+    os.makedirs(os.path.dirname(HASHES_PATH), exist_ok=True)
+    with open(HASHES_PATH, "w", encoding="utf-8") as f:
+        json.dump({"gridSize": GRID_SIZE, "cards": cards}, f, ensure_ascii=False)
+
+    print(f"Hashes generated: {len(cards)} cards ({skipped} skipped)")
+
+
 def main():
     # Fetch and parse gallery
     html = fetch_gallery_html()
@@ -411,6 +523,13 @@ def main():
 
     # Download images
     download_images(cards)
+
+    # Rotate landscape images to portrait
+    rotate_landscape_images()
+
+    # Generate color grid hashes for card matching
+    generate_card_hashes()
+
     print("Scraping complete!")
 
 

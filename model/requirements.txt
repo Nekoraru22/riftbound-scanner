@@ -1,7 +1,12 @@
-modal
-requests
-beautifulsoup4
-tqdm
-Pillow
-numpy
-opencv-python
+# HTTP requests with connection pooling
+requests>=2.31.0
+
+# Progress bars for downloads and processing
+tqdm>=4.66.0
+
+# Image manipulation (rotation)
+Pillow>=10.0.0
+
+# Image processing (color grid hashing)
+opencv-python>=4.8.0
+numpy>=1.24.0
