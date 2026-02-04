@@ -1375,9 +1375,15 @@ def create_dataset(card_paths: list[str]) -> None:
         initargs=(card_paths, base_seed),
     ) as executor:
         futures = {executor.submit(_generate_and_save, task): task for task in tasks}
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Generating dataset"):
-            if not future.result():
-                empty_count += 1
+        try:
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Generating dataset"):
+                if not future.result():
+                    empty_count += 1
+        except KeyboardInterrupt:
+            for f in futures:
+                f.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
 
     if empty_count > 0:
         print(f"Warning: {empty_count} images skipped (no valid labels)")
@@ -1437,4 +1443,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nInterrupted.")

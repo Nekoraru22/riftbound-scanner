@@ -194,7 +194,8 @@ def export_model_fn():
     compatibility with browser runtimes.
     """
     import os
-    from ultralytics import YOLO # pyright: ignore[reportPrivateImportUsage]
+    import subprocess
+    import sys
 
     volume.reload()
 
@@ -202,10 +203,16 @@ def export_model_fn():
     if not os.path.exists(best_path):
         raise FileNotFoundError(f"Model not found at {best_path}. Train first.")
 
-    os.environ["CUDA_VISIBLE_DEVICES"] = ""
     print("Exporting model to TensorFlow.js...")
-    model = YOLO(best_path)
-    model.export(format="tfjs", imgsz=640, device="cpu", opset=12)
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = ""
+    subprocess.run(
+        [sys.executable, "-c",
+         f"from ultralytics import YOLO; "
+         f"YOLO('{best_path}').export(format='tfjs', imgsz=640, device='cpu', opset=12)"],
+        env=env,
+        check=True,
+    )
 
     volume.commit()
     print("Export complete.")
@@ -285,13 +292,23 @@ def train_model():
         degrees=15,
     )
 
-    # Export to TensorFlow.js (CPU + opset 12 for browser compatibility)
-    # Hide GPU from TensorFlow to avoid libdevice/XLA errors during onnx2tf conversion
-    os.environ["CUDA_VISIBLE_DEVICES"] = ""
-    print("Exporting model to TensorFlow.js...")
+    # Export to TensorFlow.js in a subprocess with GPU hidden.
+    # CUDA_VISIBLE_DEVICES must be set before TF is imported, so we
+    # can't do it in-process since PyTorch already initialized CUDA.
+    import subprocess
+    import sys
+
     best_path = os.path.join(REMOTE_RUNS_DIR, "train", "weights", "best.pt")
-    export_model = YOLO(best_path)
-    export_model.export(format="tfjs", imgsz=640, device="cpu", opset=12)
+    print("Exporting model to TensorFlow.js...")
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = ""
+    subprocess.run(
+        [sys.executable, "-c",
+         f"from ultralytics import YOLO; "
+         f"YOLO('{best_path}').export(format='tfjs', imgsz=640, device='cpu', opset=12)"],
+        env=env,
+        check=True,
+    )
 
     volume.commit()
     print("Training and export complete.")

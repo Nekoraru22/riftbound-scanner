@@ -384,12 +384,17 @@ def download_images(cards: list[dict]) -> None:
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {executor.submit(_download_single_image, card, existing_files): card for card in cards_to_download}
-
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Downloading images"):
-            card_id, success = future.result()
-            if not success:
-                failed += 1
-                tqdm.write(f"  Error downloading {card_id}")
+        try:
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Downloading images"):
+                card_id, success = future.result()
+                if not success:
+                    failed += 1
+                    tqdm.write(f"  Error downloading {card_id}")
+        except KeyboardInterrupt:
+            for f in futures:
+                f.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
 
     print(f"Download complete. Skipped: {skipped}, Failed: {failed}")
 
@@ -534,4 +539,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nInterrupted.")
