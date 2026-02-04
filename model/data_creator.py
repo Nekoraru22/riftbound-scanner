@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-import math
 import os
+import cv2
+import math
 import random
 import sqlite3
-from pathlib import Path
-
-import cv2
 import numpy as np
 from tqdm import tqdm
 from PIL import Image, ImageEnhance
+
+from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
 
 # Random number generator
 rng = np.random.default_rng(seed=42)
@@ -49,6 +51,7 @@ DISTRACTOR_PROB = 0.4
 HORIZONTAL_FLIP_PROB = 0.5
 VIGNETTE_PROB = 0.3
 COLOR_JITTER_PROB = 0.4
+NUM_WORKERS = max(1, (os.cpu_count() or 1) - 1)
 
 
 def load_card_paths_from_db() -> list[str]:
@@ -1193,6 +1196,59 @@ def generate_mosaic_image(card_paths: list[str]) -> tuple[np.ndarray, list[str]]
     return mosaic, all_labels
 
 
+_worker_card_paths: list[str] = []
+
+
+def _init_worker(card_paths: list[str], base_seed: int) -> None:
+    """
+    Initializes random state and shared data in each worker process.
+
+    Called once per worker at pool startup. Seeds both the stdlib
+    random module and the numpy random generator with a unique
+    per-process seed to ensure varied output across workers.
+
+    Arguments:
+        card_paths: List of absolute paths to card images.
+        base_seed: Base seed value combined with PID for uniqueness.
+    """
+    global rng, _worker_card_paths
+    worker_seed = base_seed + os.getpid()
+    random.seed(worker_seed)
+    rng = np.random.default_rng(seed=worker_seed)
+    _worker_card_paths = card_paths
+
+
+def _generate_and_save(task: tuple[int, str]) -> bool:
+    """
+    Generates a single synthetic image and saves it to disk.
+
+    Worker function executed in a subprocess. Generates one image
+    with its labels and writes both to the appropriate split directory.
+
+    Arguments:
+        task: A tuple of (image_index, split_name).
+
+    Returns:
+        True if the image was saved, False if skipped (no valid labels).
+    """
+    idx, split = task
+    use_mosaic = split == "train"
+    img, labels = generate_image(_worker_card_paths, use_mosaic=use_mosaic)
+
+    if not labels:
+        return False
+
+    name = f"synth_{idx:06d}"
+    img_path = os.path.join(DATASET_DIR, split, "images", f"{name}.jpg")
+    lbl_path = os.path.join(DATASET_DIR, split, "labels", f"{name}.txt")
+
+    cv2.imwrite(img_path, img, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    with open(lbl_path, "w") as f:
+        f.write("\n".join(labels) + "\n")
+
+    return True
+
+
 def create_dataset(card_paths: list[str]) -> None:
     """
     Generates the complete synthetic dataset with train/val splits.
@@ -1214,32 +1270,28 @@ def create_dataset(card_paths: list[str]) -> None:
     print(f"Generating {total_images} images ({train_count} train, {total_images - train_count} val)...")
     print(f"Using textures: {len(get_textures())} found in {TEXTURES_DIR}")
     print(f"Using distractors: {len(get_distractors())} found in {DISTRACTORS_DIR}")
+    print(f"Using {NUM_WORKERS} worker processes")
 
     indices = list(range(total_images))
     random.shuffle(indices)
     train_set = set(indices[:train_count])
 
+    tasks = [
+        (i, "train" if i in train_set else "val")
+        for i in range(total_images)
+    ]
+    base_seed = random.randint(0, 2**31)
     empty_count = 0
 
-    for i in tqdm(range(total_images), desc="Generating dataset"):
-        split = "train" if i in train_set else "val"
-
-        # Use mosaic more often in training
-        use_mosaic = split == "train"
-
-        img, labels = generate_image(card_paths, use_mosaic=use_mosaic)
-
-        if not labels:
-            empty_count += 1
-            continue
-
-        name = f"synth_{i:06d}"
-        img_path = os.path.join(DATASET_DIR, split, "images", f"{name}.jpg")
-        lbl_path = os.path.join(DATASET_DIR, split, "labels", f"{name}.txt")
-
-        cv2.imwrite(img_path, img, [cv2.IMWRITE_JPEG_QUALITY, 92])
-        with open(lbl_path, "w") as f:
-            f.write("\n".join(labels) + "\n")
+    with ProcessPoolExecutor(
+        max_workers=NUM_WORKERS,
+        initializer=_init_worker,
+        initargs=(card_paths, base_seed),
+    ) as executor:
+        futures = {executor.submit(_generate_and_save, task): task for task in tasks}
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Generating dataset"):
+            if not future.result():
+                empty_count += 1
 
     if empty_count > 0:
         print(f"Warning: {empty_count} images skipped (no valid labels)")
