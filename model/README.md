@@ -1,10 +1,3 @@
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-python scraper.py
-python dataCreator.py
-
 modal run --detach .\train.py
 modal run --detach .\train.py --export-only
 # --detach para que se ejecute en segundo plano
