@@ -38,6 +38,22 @@ A web application for scanning and cataloging RiftBound TCG cards using AI-power
 └────────────────────────────────────────┘
 ```
 
+## How Detection Works
+
+The scanner uses a **dual-layer approach** to scan cards in real time:
+
+| Layer | Model | Question it answers | Details |
+|-------|-------|---------------------|---------|
+| **Detection** | YOLO11n-OBB | *Where* is there a card? | Locates cards in the camera frame with oriented bounding boxes (handles any rotation). Single class (`card`), trained on synthetic data. |
+| **Identification** | Color grid + cosine similarity | *Which* card is it? | Crops the detected region, reduces it to an 8×8 color grid, and matches it against stored fingerprints of all ~245 cards. |
+
+YOLO alone doesn't know which card it's looking at — it only finds rectangular card-shaped objects. The color grid matcher then takes each crop and identifies the specific card by comparing color distributions.
+
+```
+Camera Frame ──► YOLO detects card positions ──► Crop each card ──► 8×8 color grid ──► Cosine similarity ──► Card identified
+                 (bounding box + rotation)        from frame          fingerprint          vs stored hashes      (name, set, rarity)
+```
+
 ## Card Color Grid Hashing
 
 The scanner identifies cards using a **color grid fingerprinting** system. This approach is more robust than perceptual hashing for matching noisy camera crops.

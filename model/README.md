@@ -10,3 +10,5 @@ npm run dev
 
 # TODO
 La calidad de la cámara en la web igual es demasiado alta para el entrenamiento del modelo, reduce la resolución de la cámara.
+
+que se limpien las cosas al iniciar o antes de meter cosas nuevas
