@@ -48,6 +48,7 @@ MOTION_BLUR_PROB = 0.15
 JPEG_ARTIFACT_PROB = 0.25
 CUTOUT_PROB = 0.15
 MOSAIC_PROB = 0.25
+GRID_PROB = 0.15
 DISTRACTOR_PROB = 0.4
 HORIZONTAL_FLIP_PROB = 0.5
 VIGNETTE_PROB = 0.3
@@ -1043,6 +1044,76 @@ def _place_single_card(
     return bg, corners, (px, py)
 
 
+def generate_grid_image(card_paths: list[str]) -> tuple[np.ndarray, list[str]]:
+    """
+    Generates a training image with cards arranged in a grid layout.
+
+    Places cards in a 2x2, 2x3, or 3x3 grid with small gaps and slight
+    random jitter, simulating how users lay out cards on a surface.
+
+    Arguments:
+        card_paths: List of absolute paths to card images.
+
+    Returns:
+        A tuple of (image, labels) where labels is a list of OBB
+        label strings in YOLO format.
+    """
+    bg = generate_random_background(OUTPUT_SIZE)
+    bg = add_lighting_gradient(bg)
+
+    rows, cols = random.choice([(2, 2), (2, 3), (3, 3)])
+    n_cards = rows * cols
+    selected = random.sample(card_paths, min(n_cards, len(card_paths)))
+
+    # Card size: fit grid into ~85% of the image
+    margin = 0.075
+    usable = 1.0 - 2 * margin
+    gap = random.uniform(0.01, 0.03)
+    card_w = (usable - gap * (cols - 1)) / cols
+    card_h = (usable - gap * (rows - 1)) / rows
+    scale = min(card_w, card_h * 0.72)  # cards are taller than wide (~1.39 ratio)
+
+    labels = []
+    card_corners_for_shadows = []
+    idx = 0
+
+    for r in range(rows):
+        for c in range(cols):
+            if idx >= len(selected):
+                break
+            card_img = cv2.imread(selected[idx], cv2.IMREAD_UNCHANGED)
+            idx += 1
+            if card_img is None:
+                continue
+
+            # Grid position with slight jitter
+            px = margin + c * (scale + gap) + scale / 2 + random.uniform(-0.01, 0.01)
+            py = margin + r * (scale / 0.72 + gap) + (scale / 0.72) / 2 + random.uniform(-0.01, 0.01)
+
+            # Small angle jitter (-5 to 5 degrees)
+            angle = random.uniform(-5, 5)
+            flip = random.random() < HORIZONTAL_FLIP_PROB
+
+            bg, corners = place_card_on_bg(bg, card_img, angle, scale, px, py, flip)
+            if corners is None:
+                continue
+
+            card_corners_for_shadows.append(corners)
+            coords = " ".join(f"{c[0]:.6f} {c[1]:.6f}" for c in corners)
+            labels.append(f"0 {coords}")
+
+    if random.random() < SHADOW_PROB:
+        for corners in card_corners_for_shadows:
+            bg = add_card_shadow(bg, corners)
+
+    bg = augment_color(bg)
+    bg = add_vignette(bg)
+    bg = apply_motion_blur(bg)
+    bg = apply_jpeg_artifacts(bg)
+
+    return bg, labels
+
+
 def generate_image(card_paths: list[str], use_mosaic: bool = False) -> tuple[np.ndarray, list[str]]:
     """
     Generates a single synthetic training image with 1-5 cards.
@@ -1062,6 +1133,9 @@ def generate_image(card_paths: list[str], use_mosaic: bool = False) -> tuple[np.
 
     if use_mosaic and random.random() < MOSAIC_PROB:
         return generate_mosaic_image(card_paths)
+
+    if random.random() < GRID_PROB:
+        return generate_grid_image(card_paths)
 
     bg = generate_random_background(OUTPUT_SIZE)
 
