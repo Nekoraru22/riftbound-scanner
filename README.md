@@ -14,19 +14,28 @@ A web application for scanning and cataloging RiftBound TCG cards using AI-power
 │  4. Download card images (parallel)                             │
 │  5. Rotate landscape images to portrait                         │
 │  6. Generate color grid hashes ──────────────────────┐          │
-└──────────────────────────────────────────────────────│──────────┘
-                                                       │
-                                                       ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      card-hashes.json                           │
-│  { "gridSize": 8, "cards": [{ id, name, f: [192 floats] }] }    │
-└──────────────────────────────────────────────────────│──────────┘
-                                                       │
-                                                       ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    Frontend Card Matcher                        │
-│  Compares camera crops with hashes using cosine similarity      │
-└─────────────────────────────────────────────────────────────────┘
+└──────────────────────────────┬───────────────────────│──────────┘
+                               │                       │
+                               ▼                       ▼
+┌────────────────────────────────────────┐  ┌─────────────────────┐
+│           data_creator.py              │  │   card-hashes.json  │
+├────────────────────────────────────────┤  └──────────┬──────────┘
+│  1. Load card images from SQLite       │             │
+│  2. Generate synthetic backgrounds     │             ▼
+│  3. Place cards with random transforms │  ┌─────────────────────┐
+│  4. Apply augmentation pipeline        │  │ Frontend Card Matcher│
+│  5. Export YOLO OBB dataset            │  │ (cosine similarity) │
+└──────────────────┬─────────────────────┘  └─────────────────────┘
+                   │
+                   ▼
+┌────────────────────────────────────────┐
+│              train.py                  │
+├────────────────────────────────────────┤
+│  1. Upload dataset to Modal            │
+│  2. Train YOLO11n-OBB on cloud GPU     │
+│  3. Export to TensorFlow.js            │
+│  4. Download model to public/models/   │
+└────────────────────────────────────────┘
 ```
 
 ## Card Color Grid Hashing
@@ -127,6 +136,91 @@ Scraping complete!
 | `model/cards/*.png` | Downloaded card images |
 | `public/card-hashes.json` | Color grid hashes for frontend matching |
 
+## Synthetic Dataset Generation
+
+`data_creator.py` generates a synthetic YOLO OBB training dataset by compositing card images onto randomized backgrounds with heavy augmentation. The goal is to train a model that detects cards in real-world camera frames.
+
+### Running the Generator
+
+```bash
+cd model
+python data_creator.py
+```
+
+Generation is parallelized across all CPU cores using `ProcessPoolExecutor`.
+
+### Augmentation Pipeline
+
+Each training image goes through the following pipeline:
+
+```
+Background Generation          Card Placement              Global Augmentations
+┌───────────────────┐        ┌──────────────────┐        ┌────────────────────┐
+│ - Solid color     │        │ - Random scale   │        │ - Brightness       │
+│ - Gradient        │  ───►  │ - Random rotation│  ───►  │ - Contrast         │
+│ - Perlin noise    │        │ - Perspective    │        │ - Saturation       │
+│ - Blurred noise   │        │ - Horizontal flip│        │ - Hue shift        │
+│ - Two-tone split  │        │ - Shadow casting │        │ - Color jitter     │
+│ - Real texture    │        │ - Overlap avoid  │        │ - Gaussian noise   │
+│ + Lighting grad.  │        │ - 1-5 cards      │        │ - Motion blur      │
+│ + Distractors     │        └──────────────────┘        │ - JPEG artifacts   │
+└───────────────────┘                                     │ - Vignette         │
+                                                          │ - Cutout           │
+                                                          └────────────────────┘
+```
+
+Additionally, ~25% of training images use **mosaic augmentation** (YOLOv4+ style), which splits the image into 4 quadrants with independent scenes.
+
+### Optional Assets
+
+Place these in the `model/` directory before running the generator:
+
+| Directory | Contents | Effect |
+| --- | --- | --- |
+| `textures/` | JPG/PNG photos of real surfaces (desks, mats, tables) | Used as backgrounds 40% of the time |
+| `distractors/` | PNG objects with alpha (dice, tokens, sleeves) | Placed randomly to teach the model to ignore non-card objects |
+
+### Configuration
+
+Key settings at the top of `data_creator.py`:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `IMAGES_PER_CARD` | 150 | Synthetic images generated per card |
+| `OUTPUT_SIZE` | 640 | Image dimensions (640x640) |
+| `MAX_CARDS_PER_IMAGE` | 5 | Maximum cards per scene |
+| `TRAIN_RATIO` | 0.85 | Train/val split ratio |
+| `CARD_SCALE_MIN/MAX` | 0.12 / 0.60 | Card size range relative to image |
+| `ROTATION_RANGE` | -75 to 75 | Rotation angle range in degrees |
+| `MOSAIC_PROB` | 0.25 | Probability of mosaic augmentation |
+
+### Generated Dataset Structure
+
+```
+model/dataset/
+├── data.yaml            # YOLO configuration
+├── train/
+│   ├── images/          # Training images (.jpg)
+│   └── labels/          # OBB labels (.txt)
+└── val/
+    ├── images/          # Validation images (.jpg)
+    └── labels/          # OBB labels (.txt)
+```
+
+Labels use YOLO OBB format: `class x1 y1 x2 y2 x3 y3 x4 y4` (normalized corner coordinates).
+
+## Cloud Training
+
+`train.py` handles training on [Modal](https://modal.com/) cloud GPUs:
+
+```bash
+modal run train.py                  # Upload dataset + train
+modal run train.py --skip-upload    # Train only (dataset already uploaded)
+modal run train.py --export-only    # Export and download (already trained)
+```
+
+Trains a YOLO11n-OBB model on a T4 GPU, exports to TensorFlow.js, and copies the model to `public/models/` for the web app.
+
 ## Dependencies
 
 ### Python (model/)
@@ -136,6 +230,8 @@ tqdm
 Pillow
 opencv-python
 numpy
+modal        # Cloud training (train.py)
+ultralytics  # YOLO training (train.py)
 ```
 
 ### Frontend
@@ -150,12 +246,17 @@ IndexedDB (local storage)
 ```
 riftbound-scanner-src/
 ├── model/
-│   ├── cards_scraper.py    # Main scraper + hash generator
+│   ├── cards_scraper.py    # Scraper + hash generator
+│   ├── data_creator.py     # Synthetic dataset generator
+│   ├── train.py            # Cloud training on Modal
 │   ├── riftbound.db        # SQLite database
-│   └── cards/              # Downloaded card images
+│   ├── cards/              # Downloaded card images
+│   ├── dataset/            # Generated YOLO OBB dataset
+│   ├── textures/           # (optional) Real background images
+│   └── distractors/        # (optional) Non-card PNG objects
 ├── public/
 │   ├── card-hashes.json    # Color grid hashes
-│   ├── models/             # YOLO model files
+│   ├── models/             # YOLO TF.js model files
 │   └── test.html           # Detection test page
 └── src/
     └── lib/

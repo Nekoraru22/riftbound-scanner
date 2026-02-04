@@ -2,7 +2,7 @@ import modal
 
 app = modal.App("riftbound-yolo-train")
 
-# Imagen con todas las dependencias
+# Container image with all training dependencies
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("libgl1", "libglib2.0-0")
@@ -15,7 +15,7 @@ image = (
     )
 )
 
-# Volumen persistente para guardar resultados
+# Persistent volume for storing training results
 volume = modal.Volume.from_name("riftbound-model", create_if_missing=True)
 
 REMOTE_DATASET_DIR = "/data/dataset"
@@ -24,114 +24,142 @@ REMOTE_RUNS_DIR = "/data/runs"
 
 @app.local_entrypoint()
 def main(skip_upload: bool = False, export_only: bool = False):
-    """Sube el dataset local y lanza el entrenamiento en la nube.
+    """
+    Uploads the local dataset and launches cloud training on Modal.
 
-    Uso:
-        modal run train.py                  # Sube dataset + entrena
-        modal run train.py --skip-upload    # Solo entrena (dataset ya subido)
-        modal run train.py --export-only    # Solo exporta y descarga (ya entrenado)
+    Handles three workflows: full pipeline (upload + train + download),
+    train-only (reuse uploaded dataset), and export-only (download a
+    previously trained model).
+
+    Arguments:
+        skip_upload: Skip dataset upload if already on the volume.
+        export_only: Only export and download an existing trained model.
+
+    Usage:
+        modal run train.py                  # Upload dataset + train
+        modal run train.py --skip-upload    # Train only (dataset already uploaded)
+        modal run train.py --export-only    # Export and download (already trained)
     """
     import pathlib
 
     base_dir = pathlib.Path(__file__).parent
 
     if export_only:
-        print("Exportando modelo existente...")
+        print("Exporting existing model...")
         export_model_fn.remote()
 
-        print("Descargando resultados...")
+        print("Downloading results...")
         output_dir = base_dir / "runs"
         output_dir.mkdir(exist_ok=True)
         _download_results(output_dir)
-        print(f"Resultados guardados en {output_dir}")
+        print(f"Results saved to {output_dir}")
         _copy_model_to_public(base_dir)
         return
 
     if not skip_upload:
-        import hashlib
-
-        dataset_dir = base_dir / "dataset"
-        if not dataset_dir.exists():
-            print("ERROR: No se encontró model/dataset/. Ejecuta primero trainCreator.py")
-            return
-
-        archive_path = base_dir / "dataset.tar.gz"
-        hash_path = base_dir / "dataset.tar.gz.sha256"
-
-        # Calcular hash del dataset actual (basado en lista de archivos + tamaños)
-        hasher = hashlib.sha256()
-        for f in sorted(dataset_dir.rglob("*")):
-            if f.is_file():
-                hasher.update(f"{f.relative_to(dataset_dir)}:{f.stat().st_size}\n".encode())
-        current_hash = hasher.hexdigest()
-
-        # Comprobar si el archivo comprimido ya existe y coincide
-        previous_hash = hash_path.read_text().strip() if hash_path.exists() else ""
-
-        if archive_path.exists() and current_hash == previous_hash:
-            print("Dataset sin cambios, reutilizando archivo comprimido existente.")
-        else:
-            import tarfile
-
-            print("Comprimiendo dataset...")
-            with tarfile.open(str(archive_path), "w:gz") as tar:
-                for item in dataset_dir.iterdir():
-                    tar.add(str(item), arcname=item.name)
-            hash_path.write_text(current_hash)
-            archive_size = archive_path.stat().st_size / (1024 * 1024)
-            print(f"Dataset comprimido: {archive_size:.1f} MB")
-
-        print("Subiendo a Modal...")
-        with volume.batch_upload(force=True) as batch:
-            batch.put_file(str(archive_path), "dataset.tar.gz")
-        print("Dataset subido.")
+        _upload_dataset(base_dir)
     else:
-        print("Saltando subida de dataset (--skip-upload)")
+        print("Skipping dataset upload (--skip-upload)")
 
-    print("Iniciando entrenamiento...")
+    print("Starting training...")
     train_model.remote()
 
-    # Descargar resultados
-    print("Descargando modelo entrenado...")
+    # Download results
+    print("Downloading trained model...")
     output_dir = base_dir / "runs"
     output_dir.mkdir(exist_ok=True)
 
     _download_results(output_dir)
-    print(f"Resultados guardados en {output_dir}")
+    print(f"Results saved to {output_dir}")
     _copy_model_to_public(base_dir)
 
 
+def _upload_dataset(base_dir):
+    """
+    Compresses and uploads the local dataset to the Modal volume.
+
+    Computes a SHA-256 hash of the dataset directory contents (file
+    names and sizes) to detect changes. Reuses the existing archive
+    if the dataset hasn't changed since the last upload.
+
+    Arguments:
+        base_dir: The model directory containing the dataset folder.
+    """
+    import hashlib
+    import tarfile
+
+    dataset_dir = base_dir / "dataset"
+    if not dataset_dir.exists():
+        print("ERROR: model/dataset/ not found. Run data_creator.py first.")
+        return
+
+    archive_path = base_dir / "dataset.tar.gz"
+    hash_path = base_dir / "dataset.tar.gz.sha256"
+
+    # Hash current dataset based on file list + sizes
+    hasher = hashlib.sha256()
+    for f in sorted(dataset_dir.rglob("*")):
+        if f.is_file():
+            hasher.update(f"{f.relative_to(dataset_dir)}:{f.stat().st_size}\n".encode())
+    current_hash = hasher.hexdigest()
+
+    # Check if the existing archive matches
+    previous_hash = hash_path.read_text().strip() if hash_path.exists() else ""
+
+    if archive_path.exists() and current_hash == previous_hash:
+        print("Dataset unchanged, reusing existing archive.")
+    else:
+        print("Compressing dataset...")
+        with tarfile.open(str(archive_path), "w:gz") as tar:
+            for item in dataset_dir.iterdir():
+                tar.add(str(item), arcname=item.name)
+        hash_path.write_text(current_hash)
+        archive_size = archive_path.stat().st_size / (1024 * 1024)
+        print(f"Dataset compressed: {archive_size:.1f} MB")
+
+    print("Uploading to Modal...")
+    with volume.batch_upload(force=True) as batch:
+        batch.put_file(str(archive_path), "dataset.tar.gz")
+    print("Dataset uploaded.")
+
+
 def _copy_model_to_public(base_dir):
-    """Copia el modelo TF.js a public/models/ para la app web."""
-    import pathlib
+    """
+    Copies the exported TF.js model to the public web app directory.
+
+    Arguments:
+        base_dir: The model directory containing the runs folder.
+    """
     import shutil
 
     src = base_dir / "runs" / "train" / "weights" / "best_web_model"
     dst = base_dir.parent / "public" / "models" / "yolo11n-obb-riftbound"
 
     if not src.exists():
-        print(f"No se encontró {src}, saltando copia a public/")
+        print(f"Model not found at {src}, skipping copy to public/")
         return
 
     if dst.exists():
         shutil.rmtree(dst)
     shutil.copytree(src, dst)
-    print(f"Modelo copiado a {dst}")
+    print(f"Model copied to {dst}")
 
 
 def _download_results(local_dir):
-    """Descarga los resultados del volumen."""
+    """
+    Downloads training results from the Modal volume to a local directory.
+
+    Iterates over all files in the volume's runs directory and writes
+    them to the corresponding local paths.
+
+    Arguments:
+        local_dir: The local directory to save the results to.
+    """
     import pathlib
 
-    volume_runs = "runs"
-
-    for entry in volume.listdir(volume_runs, recursive=True):
-        # entry.path ya incluye el prefijo "runs/", así que lo quitamos
-        # para evitar runs/runs/...
-        rel = entry.path
-        if rel.startswith("runs/"):
-            rel = rel[len("runs/"):]
-
+    for entry in volume.listdir("runs", recursive=True):
+        # entry.path includes the "runs/" prefix, strip it to avoid runs/runs/
+        rel = entry.path.removeprefix("runs/")
         local_path = pathlib.Path(local_dir) / rel
 
         if entry.type == modal.volume.FileEntryType.FILE:
@@ -148,6 +176,13 @@ def _download_results(local_dir):
     volumes={"/data": volume},
 )
 def export_model_fn():
+    """
+    Exports a trained YOLO model to TensorFlow.js format.
+
+    Loads the best checkpoint from a previous training run and
+    exports it. Uses CPU device and opset 12 for maximum
+    compatibility with browser runtimes.
+    """
     import os
     from ultralytics import YOLO
 
@@ -155,16 +190,14 @@ def export_model_fn():
 
     best_path = os.path.join(REMOTE_RUNS_DIR, "train", "weights", "best.pt")
     if not os.path.exists(best_path):
-        raise FileNotFoundError(f"No se encontró {best_path}. Entrena primero.")
+        raise FileNotFoundError(f"Model not found at {best_path}. Train first.")
 
-    print("Exportando modelo a TensorFlow.js...")
+    print("Exporting model to TensorFlow.js...")
     model = YOLO(best_path)
-    
-    # IMPORTANTE: device='cpu' evita errores de drivers y opset=12 es más compatible
     model.export(format="tfjs", imgsz=640, device="cpu", opset=12)
 
     volume.commit()
-    print("Exportación completada.")
+    print("Export complete.")
 
 
 @app.function(
@@ -174,60 +207,58 @@ def export_model_fn():
     volumes={"/data": volume},
 )
 def train_model():
-    """Entrena YOLO11n-OBB en GPU remota de Modal."""
-    import os
-    from ultralytics import YOLO
+    """
+    Trains a YOLO11n-OBB model on a remote Modal GPU.
 
+    Extracts the dataset archive, rewrites data.yaml with remote
+    paths, runs YOLO training, exports the best model to TF.js,
+    and commits the results to the persistent volume.
+    """
+    import os
     import shutil
+    from ultralytics import YOLO
 
     volume.reload()
 
-    # Debug: listar contenido de /data/
-    print(f"Contenido de /data/: {os.listdir('/data/')}")
+    print(f"Contents of /data/: {os.listdir('/data/')}")
 
-    # Descomprimir dataset si viene como tar.gz
+    # Extract dataset from archive
     archive_path = "/data/dataset.tar.gz"
     if os.path.exists(archive_path):
-        print(f"Archivo encontrado: {archive_path} ({os.path.getsize(archive_path)} bytes)")
-        print("Descomprimiendo dataset...")
+        print(f"Archive found: {archive_path} ({os.path.getsize(archive_path)} bytes)")
+        print("Extracting dataset...")
         if os.path.exists(REMOTE_DATASET_DIR):
             shutil.rmtree(REMOTE_DATASET_DIR)
         os.makedirs(REMOTE_DATASET_DIR, exist_ok=True)
         shutil.unpack_archive(archive_path, REMOTE_DATASET_DIR)
-        print(f"Contenido de {REMOTE_DATASET_DIR}: {os.listdir(REMOTE_DATASET_DIR)}")
+        print(f"Contents of {REMOTE_DATASET_DIR}: {os.listdir(REMOTE_DATASET_DIR)}")
     else:
-        print(f"No se encontró {archive_path}")
+        print(f"Archive not found at {archive_path}")
 
-    # Verificar que el dataset existe
+    # Verify dataset structure
     if not os.path.exists(os.path.join(REMOTE_DATASET_DIR, "train")):
-        # Buscar train en subdirectorios por si la estructura es diferente
-        for root, dirs, files in os.walk(REMOTE_DATASET_DIR):
-            print(f"  {root}: dirs={dirs[:5]}, files={len(files)} archivos")
-            if len(list(os.walk(root))) > 10:
-                break
+        _print_dataset_debug(REMOTE_DATASET_DIR)
         raise FileNotFoundError(
-            f"No se encontró el dataset en {REMOTE_DATASET_DIR}. "
-            "Ejecuta sin --skip-upload para subir el dataset."
+            f"Dataset not found at {REMOTE_DATASET_DIR}. "
+            "Run without --skip-upload to upload the dataset."
         )
 
-    # Reescribir data.yaml con rutas remotas
-    data_yaml = f"""\
-path: {REMOTE_DATASET_DIR}
-train: train/images
-val: val/images
-
-nc: 1
-names: ['card']
-"""
+    # Rewrite data.yaml with remote paths
     yaml_path = os.path.join(REMOTE_DATASET_DIR, "data.yaml")
     with open(yaml_path, "w") as f:
-        f.write(data_yaml)
+        f.write(
+            f"path: {REMOTE_DATASET_DIR}\n"
+            "train: train/images\n"
+            "val: val/images\n\n"
+            "nc: 1\n"
+            "names: ['card']\n"
+        )
 
-    # Entrenar
+    # Train
     model = YOLO("yolo11n-obb.pt")
     model.train(
         data=yaml_path,
-        epochs=10,
+        epochs=20,
         imgsz=640,
         batch=32,
         device=0,
@@ -236,13 +267,31 @@ names: ['card']
         name="train",
     )
 
-    # Exportar a TensorFlow.js
-    print("Exportando modelo a TensorFlow.js...")
+    # Export to TensorFlow.js (CPU + opset 12 for browser compatibility)
+    print("Exporting model to TensorFlow.js...")
     best_path = os.path.join(REMOTE_RUNS_DIR, "train", "weights", "best.pt")
     export_model = YOLO(best_path)
-    export_model.export(format="tfjs", imgsz=640)
+    export_model.export(format="tfjs", imgsz=640, device="cpu", opset=12)
 
-    # Commit del volumen para persistir resultados
     volume.commit()
+    print("Training and export complete.")
 
-    print("Entrenamiento y exportación completados.")
+
+def _print_dataset_debug(dataset_dir: str) -> None:
+    """
+    Prints a limited directory listing for debugging dataset issues.
+
+    Walks at most 10 directories to avoid expensive traversal on
+    large or deeply nested directory trees.
+
+    Arguments:
+        dataset_dir: The root directory to inspect.
+    """
+    import os
+
+    count = 0
+    for root, dirs, files in os.walk(dataset_dir):
+        print(f"  {root}: dirs={dirs[:5]}, files={len(files)} files")
+        count += 1
+        if count >= 10:
+            break
