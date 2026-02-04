@@ -12,6 +12,10 @@ image = (
         "torchvision",
         "opencv-python-headless",
         "tensorflowjs",
+        "onnx2tf==1.26.3",
+        "onnxslim>=0.1.71",
+        "sng4onnx>=1.0.1",
+        "onnx_graphsurgeon>=0.3.26",
     )
 )
 
@@ -133,11 +137,17 @@ def _copy_model_to_public(base_dir):
     import shutil
 
     src = base_dir / "runs" / "train" / "weights" / "best_web_model"
-    dst = base_dir.parent / "public" / "models" / "yolo11n-obb-riftbound"
+    models_dir = base_dir.parent / "public" / "models"
+    dst = models_dir / "yolo11n-obb-riftbound"
 
     if not src.exists():
         print(f"Model not found at {src}, skipping copy to public/")
         return
+
+    # Clean up old models
+    if models_dir.exists():
+        shutil.rmtree(models_dir)
+        print(f"Cleaned {models_dir}")
 
     if dst.exists():
         shutil.rmtree(dst)
@@ -184,7 +194,7 @@ def export_model_fn():
     compatibility with browser runtimes.
     """
     import os
-    from ultralytics import YOLO
+    from ultralytics import YOLO # pyright: ignore[reportPrivateImportUsage]
 
     volume.reload()
 
@@ -192,6 +202,7 @@ def export_model_fn():
     if not os.path.exists(best_path):
         raise FileNotFoundError(f"Model not found at {best_path}. Train first.")
 
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
     print("Exporting model to TensorFlow.js...")
     model = YOLO(best_path)
     model.export(format="tfjs", imgsz=640, device="cpu", opset=12)
@@ -202,8 +213,8 @@ def export_model_fn():
 
 @app.function(
     image=image,
-    gpu="T4",
-    timeout=3600,
+    gpu="A10G",
+    timeout=18000,
     volumes={"/data": volume},
 )
 def train_model():
@@ -216,11 +227,14 @@ def train_model():
     """
     import os
     import shutil
-    from ultralytics import YOLO
+    from ultralytics import YOLO # pyright: ignore[reportPrivateImportUsage]
 
     volume.reload()
 
-    print(f"Contents of /data/: {os.listdir('/data/')}")
+    # Clean up old training runs
+    if os.path.exists(REMOTE_RUNS_DIR):
+        print(f"Removing old runs at {REMOTE_RUNS_DIR}...")
+        shutil.rmtree(REMOTE_RUNS_DIR)
 
     # Extract dataset from archive
     archive_path = "/data/dataset.tar.gz"
@@ -255,19 +269,22 @@ def train_model():
         )
 
     # Train
-    model = YOLO("yolo11n-obb.pt")
+    model = YOLO("yolo11s-obb.pt")
     model.train(
         data=yaml_path,
-        epochs=20,
+        epochs=40,
         imgsz=640,
-        batch=32,
+        batch=64,
         device=0,
         task="obb",
         project=REMOTE_RUNS_DIR,
         name="train",
+        exist_ok=True,
     )
 
     # Export to TensorFlow.js (CPU + opset 12 for browser compatibility)
+    # Hide GPU from TensorFlow to avoid libdevice/XLA errors during onnx2tf conversion
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
     print("Exporting model to TensorFlow.js...")
     best_path = os.path.join(REMOTE_RUNS_DIR, "train", "weights", "best.pt")
     export_model = YOLO(best_path)
