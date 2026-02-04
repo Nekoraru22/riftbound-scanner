@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import cv2
 import math
+import shutil
 import random
 import sqlite3
 import numpy as np
@@ -144,7 +145,7 @@ def get_distractors(_cache: list[str] = []) -> list[str]:
     return _cache
 
 
-def generate_gradient_background(size: int) -> np.ndarray:
+def generate_gradient_background(size: int, dark: bool = False) -> np.ndarray:
     """
     Generates a gradient background with a random direction.
 
@@ -153,12 +154,14 @@ def generate_gradient_background(size: int) -> np.ndarray:
 
     Arguments:
         size: The width and height of the square output image.
+        dark: If True, constrains colors to the 0-50 range.
 
     Returns:
         A gradient background image as a numpy array.
     """
-    c1 = np.array([random.randint(20, 240) for _ in range(3)], dtype=np.float32)
-    c2 = np.array([random.randint(20, 240) for _ in range(3)], dtype=np.float32)
+    hi = 50 if dark else 240
+    c1 = np.array([random.randint(0, hi) for _ in range(3)], dtype=np.float32)
+    c2 = np.array([random.randint(0, hi) for _ in range(3)], dtype=np.float32)
 
     direction = random.choice(['vertical', 'horizontal', 'diagonal', 'radial'])
     t = _gradient_field(size, direction)
@@ -195,7 +198,7 @@ def _gradient_field(size: int, direction: str) -> np.ndarray:
     return np.clip(dist / dist.max(), 0, 1)
 
 
-def generate_perlin_noise_background(size: int) -> np.ndarray:
+def generate_perlin_noise_background(size: int, dark: bool = False) -> np.ndarray:
     """
     Generates a smooth noise-based background using multiple octaves.
 
@@ -204,6 +207,7 @@ def generate_perlin_noise_background(size: int) -> np.ndarray:
 
     Arguments:
         size: The width and height of the square output image.
+        dark: If True, scales output to a darker range.
 
     Returns:
         A noise background image as a numpy array.
@@ -218,7 +222,8 @@ def generate_perlin_noise_background(size: int) -> np.ndarray:
         bg += noise_resized * (0.5 ** octave)
 
     # Normalize and convert
-    bg = (bg / bg.max() * 200 + 30).astype(np.uint8)
+    max_val, offset = (40, 0) if dark else (200, 30)
+    bg = (bg / bg.max() * max_val + offset).astype(np.uint8)
 
     # Random color tint
     tint = np.array([random.uniform(0.8, 1.2) for _ in range(3)])
@@ -260,19 +265,21 @@ def _load_random_texture(size: int) -> np.ndarray | None:
     return tex
 
 
-def _generate_two_tone_background(size: int) -> np.ndarray:
+def _generate_two_tone_background(size: int, dark: bool = False) -> np.ndarray:
     """
     Generates a blurred two-tone split background.
 
     Arguments:
         size: The width and height of the square output image.
+        dark: If True, constrains colors to a dark range.
 
     Returns:
         A two-tone background image as a numpy array.
     """
     bg = np.zeros((size, size, 3), dtype=np.uint8)
-    c1 = [random.randint(30, 220) for _ in range(3)]
-    c2 = [random.randint(30, 220) for _ in range(3)]
+    lo, hi = (0, 50) if dark else (30, 220)
+    c1 = [random.randint(lo, hi) for _ in range(3)]
+    c2 = [random.randint(lo, hi) for _ in range(3)]
     split = random.randint(size // 4, 3 * size // 4)
     if random.random() < 0.5:
         bg[:split, :] = c1
@@ -303,17 +310,22 @@ def generate_random_background(size: int) -> np.ndarray:
 
     choice = random.randint(0, 4)
 
+    # 40% chance of dark background to train on black-on-black scenarios
+    dark = random.random() < 0.4
+
     if choice == 0:
-        color = [random.randint(20, 240) for _ in range(3)]
+        lo, hi = (0, 50) if dark else (0, 240)
+        color = [random.randint(lo, hi) for _ in range(3)]
         return np.full((size, size, 3), color, dtype=np.uint8)
     if choice == 1:
-        return generate_gradient_background(size)
+        return generate_gradient_background(size, dark=dark)
     if choice == 2:
-        return generate_perlin_noise_background(size)
+        return generate_perlin_noise_background(size, dark=dark)
     if choice == 3:
-        bg = rng.integers(40, 200, (size, size, 3), dtype=np.uint8)
+        lo, hi = (0, 60) if dark else (40, 200)
+        bg = rng.integers(lo, hi, (size, size, 3), dtype=np.uint8)
         return cv2.GaussianBlur(bg, (15, 15), 0)
-    return _generate_two_tone_background(size)
+    return _generate_two_tone_background(size, dark=dark)
 
 
 def add_vignette(image: np.ndarray) -> np.ndarray:
@@ -1321,6 +1333,15 @@ def main() -> None:
     if not os.path.exists(DB_PATH):
         print("ERROR: riftbound.db not found. Run cards_scraper.py first.")
         return
+
+    # Clean up old dataset artifacts
+    for path in [DATASET_DIR, os.path.join(BASE_DIR, "dataset.tar.gz"), os.path.join(BASE_DIR, "dataset.tar.gz.sha256")]:
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+            print(f"Removed {path}")
+        elif os.path.isfile(path):
+            os.remove(path)
+            print(f"Removed {path}")
 
     card_paths = load_card_paths_from_db()
     if not card_paths:

@@ -269,10 +269,10 @@ def train_model():
         )
 
     # Train
-    model = YOLO("yolo11s-obb.pt")
+    model = YOLO("yolo11n-obb.pt")
     model.train(
         data=yaml_path,
-        epochs=40,
+        epochs=20,
         imgsz=640,
         batch=64,
         device=0,
@@ -280,6 +280,9 @@ def train_model():
         project=REMOTE_RUNS_DIR,
         name="train",
         exist_ok=True,
+        hsv_v=0.6,
+        mixup=0.2,
+        degrees=15,
     )
 
     # Export to TensorFlow.js (CPU + opset 12 for browser compatibility)

@@ -235,7 +235,19 @@ modal run train.py --skip-upload    # Train only (dataset already uploaded)
 modal run train.py --export-only    # Export and download (already trained)
 ```
 
-Trains a YOLO11n-OBB model on a T4 GPU, exports to TensorFlow.js, and copies the model to `public/models/` for the web app.
+Trains a YOLO11n-OBB model on an A10G GPU, exports to TensorFlow.js, and copies the model to `public/models/` for the web app.
+
+Use `--detach` to run training in the background (you can close your terminal or shut down your PC):
+
+```bash
+modal run --detach train.py          # Launch and disconnect
+modal run train.py --export-only     # Download results later
+```
+
+### Known Issues and Fixes
+
+**Poor detection on dark/black backgrounds:**
+The model struggled to detect cards on dark surfaces because the card borders are black and blended into the background. The synthetic dataset generator (`data_creator.py`) was only creating backgrounds with colors in the 20-240 range, rarely producing truly dark scenes. Fixed by biasing 40% of generated backgrounds toward the 0-50 color range, and adding stronger brightness augmentation during training (`hsv_v=0.6`, `mixup=0.2`, `degrees=15`).
 
 ## Dependencies
 
