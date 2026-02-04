@@ -71,13 +71,13 @@ export default function ScannerBottomSheet({
         <div className="flex items-center gap-2.5 mt-1">
           <span className="text-sm font-semibold text-rift-100">
             {totalCards > 0
-              ? `${totalCards} carta${totalCards !== 1 ? 's' : ''}`
-              : 'Sin cartas'
+              ? `${totalCards} card${totalCards !== 1 ? 's' : ''}`
+              : 'No cards'
             }
           </span>
           {uniqueCards > 0 && (
             <span className="text-xs text-rift-400">
-              {uniqueCards} unica{uniqueCards !== 1 ? 's' : ''}
+              {uniqueCards} unique
             </span>
           )}
         </div>
@@ -97,7 +97,7 @@ export default function ScannerBottomSheet({
               className="btn-primary text-xs flex-1 py-2 rounded-xl"
             >
               <Download className="w-3.5 h-3.5" />
-              Exportar CSV
+              Export CSV
             </button>
             <button
               onClick={() => setShowSearch(!showSearch)}
@@ -124,7 +124,7 @@ export default function ScannerBottomSheet({
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Buscar carta por nombre o numero..."
+                  placeholder="Search card by name or number..."
                   className="input-field pl-9 pr-8 rounded-xl text-xs"
                 />
                 {searchQuery && (
@@ -153,7 +153,7 @@ export default function ScannerBottomSheet({
                         <p className="text-xs text-rift-100 truncate">{card.name}</p>
                         <p className="text-[9px] text-rift-500">{card.domain} · {card.rarity}</p>
                       </div>
-                      <span className="text-[10px] text-gold-400 font-medium">+ Anadir</span>
+                      <span className="text-[10px] text-gold-400 font-medium">+ Add</span>
                     </button>
                   ))}
                 </div>
@@ -161,7 +161,7 @@ export default function ScannerBottomSheet({
 
               {searchQuery.length >= 2 && searchResults.length === 0 && (
                 <p className="text-[10px] text-rift-500 text-center py-3">
-                  No se encontraron cartas
+                  No cards found
                 </p>
               )}
             </div>
@@ -175,10 +175,10 @@ export default function ScannerBottomSheet({
             {scannedCards.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-10 text-center">
                 <p className="text-sm text-rift-400">
-                  Las cartas escaneadas apareceran aqui
+                  Scanned cards will appear here
                 </p>
                 <p className="text-xs text-rift-500 mt-1">
-                  Apunta la camara a una carta para comenzar
+                  Point the camera at a card to start
                 </p>
               </div>
             ) : (

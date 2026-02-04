@@ -3,6 +3,8 @@ import { Loader2, RotateCcw, ScanLine, Download, Plus, CheckSquare, Square } fro
 import ImageDropZone from './ImageDropZone.jsx';
 import DetectionCanvas from './DetectionCanvas.jsx';
 import CardDetailPanel from './CardDetailPanel.jsx';
+import ScannerBottomSheet from '../scanner/ScannerBottomSheet.jsx';
+import CardCounter from '../scanner/CardCounter.jsx';
 import { getDetector } from '../../lib/yoloDetector.js';
 import { getMatcher } from '../../lib/cardMatcher.js';
 import { downloadCSV, validateForExport } from '../../lib/csvExporter.js';
@@ -54,7 +56,9 @@ function ensurePortrait(canvas) {
 }
 
 function cropRotated(img, cx, cy, w, h, angle) {
-  const diag = Math.sqrt(img.width * img.width + img.height * img.height);
+  const imgW = img.naturalWidth || img.width;
+  const imgH = img.naturalHeight || img.height;
+  const diag = Math.sqrt(imgW * imgW + imgH * imgH);
   const big = document.createElement('canvas');
   big.width = Math.ceil(diag);
   big.height = Math.ceil(diag);
@@ -112,12 +116,49 @@ function identifyCard(cropCanvas, matcher) {
   };
 }
 
+/**
+ * Resolve card data from a detection's active match.
+ * Uses the matcher's data as source of truth. Only uses the main DB (cards)
+ * if the ID matches AND the name matches (to avoid SAMPLE_CARDS mismatches).
+ */
+function resolveMatchCardData(det, cards) {
+  const cardId = det.activeCardId || det.matchResult?.card?.id;
+  if (!cardId) return null;
+
+  // Find the match entry from top3 for the active card
+  const matchEntry = det.matchResult?.top3?.find(m => m.id === cardId);
+  const matchName = matchEntry?.name || det.matchResult?.card?.name;
+  const matchSet = matchEntry?.set || det.matchResult?.card?.set;
+
+  // Try main DB — only trust if name matches
+  const dbCard = cards.find(c => c.id === cardId);
+  if (dbCard && dbCard.name === matchName) {
+    return dbCard;
+  }
+
+  // Build from matcher data
+  const idParts = cardId.split('-');
+  const collectorNumber = idParts.length >= 2 ? idParts[1] : '000';
+
+  return {
+    id: cardId,
+    name: matchName,
+    collectorNumber,
+    set: matchSet,
+    setName: matchSet,
+  };
+}
+
 // --- Component ---
 
 export default function IdentifyTab({
   cards,
   scannedCards,
   onAddToScanner,
+  onUpdateCard,
+  onRemoveCard,
+  onClearAll,
+  onExport,
   showNotification,
   batchDefaults,
 }) {
@@ -127,6 +168,7 @@ export default function IdentifyTab({
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedDetection, setSelectedDetection] = useState(null);
   const [checkedIndices, setCheckedIndices] = useState(new Set());
+  const [sheetExpanded, setSheetExpanded] = useState(false);
 
   const handleImageSelected = useCallback((file) => {
     setFileName(file.name);
@@ -160,13 +202,13 @@ export default function IdentifyTab({
       if (detector.state === 'ready') {
         rawDetections = await detector.detect(canvas);
       } else {
-        showNotification('El detector no esta listo', 'error');
+        showNotification('Detector not ready', 'error');
         setIsProcessing(false);
         return;
       }
 
       if (!rawDetections || rawDetections.length === 0) {
-        showNotification('No se detectaron cartas en la imagen', 'info');
+        showNotification('No cards detected in the image', 'info');
         setIsProcessing(false);
         return;
       }
@@ -206,14 +248,14 @@ export default function IdentifyTab({
       }
 
       setDetections(results);
-      showNotification(`${results.length} carta${results.length !== 1 ? 's' : ''} detectada${results.length !== 1 ? 's' : ''}`, 'success');
+      showNotification(`${results.length} card${results.length !== 1 ? 's' : ''} detected`, 'success');
 
       if (results.length > 0) {
         setSelectedDetection(0);
       }
     } catch (error) {
       console.error('[IdentifyTab] Detection error:', error);
-      showNotification('Error durante la deteccion', 'error');
+      showNotification('Error during detection', 'error');
     }
 
     setIsProcessing(false);
@@ -229,8 +271,7 @@ export default function IdentifyTab({
 
   const handleAddToScanner = useCallback((cardData) => {
     onAddToScanner(cardData);
-    showNotification(`+ ${cardData.name}`, 'success');
-  }, [onAddToScanner, showNotification]);
+  }, [onAddToScanner]);
 
   // Toggle checkbox for a detection
   const toggleCheck = useCallback((idx) => {
@@ -261,16 +302,14 @@ export default function IdentifyTab({
     for (const idx of checkedIndices) {
       const det = detections[idx];
       if (!det?.matchResult?.card) continue;
-      // Use the panel's selected match (stored in detection state)
-      const cardId = det.activeCardId || det.matchResult.card.id;
-      const fullCard = cards.find(c => c.id === cardId);
-      if (fullCard) {
-        onAddToScanner(fullCard);
+      const cardData = resolveMatchCardData(det, cards);
+      if (cardData) {
+        onAddToScanner(cardData);
         added++;
       }
     }
     if (added > 0) {
-      showNotification(`${added} carta${added !== 1 ? 's' : ''} anadida${added !== 1 ? 's' : ''}`, 'success');
+      showNotification(`${added} card${added !== 1 ? 's' : ''} added`, 'success');
     }
     setCheckedIndices(new Set());
   }, [checkedIndices, detections, cards, onAddToScanner, showNotification]);
@@ -281,11 +320,10 @@ export default function IdentifyTab({
     for (const idx of checkedIndices) {
       const det = detections[idx];
       if (!det?.matchResult?.card) continue;
-      const cardId = det.activeCardId || det.matchResult.card.id;
-      const fullCard = cards.find(c => c.id === cardId);
-      if (fullCard) {
+      const cardData = resolveMatchCardData(det, cards);
+      if (cardData) {
         exportCards.push({
-          cardData: fullCard,
+          cardData,
           quantity: 1,
           condition: batchDefaults.condition,
           language: batchDefaults.language,
@@ -294,7 +332,7 @@ export default function IdentifyTab({
       }
     }
     if (exportCards.length === 0) {
-      showNotification('Selecciona al menos una carta', 'error');
+      showNotification('Select at least one card', 'error');
       return;
     }
     const { valid, errors } = validateForExport(exportCards);
@@ -303,7 +341,7 @@ export default function IdentifyTab({
       return;
     }
     downloadCSV(exportCards);
-    showNotification(`CSV exportado — ${exportCards.length} cartas`, 'success');
+    showNotification(`CSV exported — ${exportCards.length} cards`, 'success');
   }, [checkedIndices, detections, cards, batchDefaults, showNotification]);
 
   // Called by CardDetailPanel when user switches the active match
@@ -315,148 +353,168 @@ export default function IdentifyTab({
     });
   }, []);
 
-  const isCardInScanner = (cardId) => {
-    return scannedCards.some(c => c.cardData.id === cardId);
-  };
-
   const matchedCount = detections.filter(d => d.matchResult && d.matchResult.similarity > 0.55).length;
   const allChecked = matchedCount > 0 && checkedIndices.size === matchedCount;
+  const totalCards = scannedCards.reduce((sum, c) => sum + c.quantity, 0);
 
   return (
-    <div className="flex-1 overflow-y-auto pb-20">
-      <div className="px-4 pt-5 pb-4 space-y-4">
-        {/* Page title */}
-        <div className="mb-2">
-          <h1 className="text-xl font-display font-bold text-rift-100">Identificar</h1>
-          <p className="text-xs text-rift-400 mt-1">Sube una imagen para detectar e identificar cartas</p>
-        </div>
-
-        {/* Upload area or canvas */}
-        {!uploadedImage ? (
-          <ImageDropZone onImageSelected={handleImageSelected} isProcessing={isProcessing} />
-        ) : (
-          <div className="space-y-3">
-            {/* Image info + reset */}
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 min-w-0">
-                <ScanLine className="w-4 h-4 text-gold-400 flex-shrink-0" />
-                <span className="text-xs text-rift-300 truncate">{fileName}</span>
-              </div>
-              <button
-                onClick={handleReset}
-                className="btn-ghost text-xs py-1.5 px-3 rounded-xl flex-shrink-0"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                Nueva
-              </button>
-            </div>
-
-            {/* Detection canvas */}
-            <DetectionCanvas
-              image={uploadedImage}
-              detections={detections}
-              selectedIndex={selectedDetection}
-              onSelectDetection={setSelectedDetection}
-            />
-
-            {/* Processing indicator */}
-            {isProcessing && (
-              <div className="flex items-center justify-center gap-2 py-4">
-                <Loader2 className="w-5 h-5 text-gold-400 animate-spin" />
-                <span className="text-sm text-rift-300">Detectando cartas...</span>
-              </div>
-            )}
+    <div className="flex-1 relative overflow-hidden">
+      <div className="h-full overflow-y-auto pb-20">
+        <div className="px-4 pt-5 pb-4 space-y-4">
+          {/* Page title */}
+          <div className="mb-2">
+            <h1 className="text-xl font-display font-bold text-rift-100">Identify</h1>
+            <p className="text-xs text-rift-400 mt-1">Upload an image to detect and identify cards</p>
           </div>
-        )}
 
-        {/* Detection results */}
-        {detections.length > 0 && (
-          <div className="space-y-3">
-            {/* Results header */}
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-rift-100">
-                Resultados ({detections.length})
-              </h2>
-              <button
-                onClick={() => runDetection(uploadedImage)}
-                disabled={isProcessing}
-                className="btn-ghost text-xs py-1 px-2 rounded-lg"
-              >
-                <RotateCcw className="w-3 h-3" />
-                Redetectar
-              </button>
-            </div>
-
-            {/* Bulk actions bar */}
-            {matchedCount > 0 && (
-              <div className="flex items-center gap-2">
+          {/* Upload area or canvas */}
+          {!uploadedImage ? (
+            <ImageDropZone onImageSelected={handleImageSelected} isProcessing={isProcessing} />
+          ) : (
+            <div className="space-y-3">
+              {/* Image info + reset */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 min-w-0">
+                  <ScanLine className="w-4 h-4 text-gold-400 flex-shrink-0" />
+                  <span className="text-xs text-rift-300 truncate">{fileName}</span>
+                </div>
                 <button
-                  onClick={toggleSelectAll}
-                  className="btn-ghost text-xs py-1.5 px-2.5 rounded-xl"
+                  onClick={handleReset}
+                  className="btn-ghost text-xs py-1.5 px-3 rounded-xl flex-shrink-0"
                 >
-                  {allChecked ? (
-                    <CheckSquare className="w-3.5 h-3.5 text-gold-400" />
-                  ) : (
-                    <Square className="w-3.5 h-3.5" />
-                  )}
-                  {allChecked ? 'Deseleccionar' : 'Seleccionar todo'}
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  New
                 </button>
-                <div className="flex-1" />
-                {checkedIndices.size > 0 && (
-                  <>
-                    <button
-                      onClick={addCheckedToScanner}
-                      className="btn-primary text-xs py-1.5 px-3 rounded-xl"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      Anadir ({checkedIndices.size})
-                    </button>
-                    <button
-                      onClick={exportCheckedCSV}
-                      className="btn-secondary text-xs py-1.5 px-3 rounded-xl"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      CSV
-                    </button>
-                  </>
-                )}
               </div>
-            )}
 
-            {/* Detection cards */}
-            <div className="space-y-2">
-              {detections.map((det, idx) => {
-                const activeCardId = det.activeCardId || det.matchResult?.card?.id;
-                return (
-                  <CardDetailPanel
-                    key={idx}
-                    detection={det}
-                    index={idx}
-                    onAddToScanner={handleAddToScanner}
-                    isInScannerList={activeCardId ? isCardInScanner(activeCardId) : false}
-                    cards={cards}
-                    isChecked={checkedIndices.has(idx)}
-                    onToggleCheck={() => toggleCheck(idx)}
-                    onMatchChange={handleMatchChange}
-                  />
-                );
-              })}
+              {/* Detection canvas */}
+              <DetectionCanvas
+                image={uploadedImage}
+                detections={detections}
+                selectedIndex={selectedDetection}
+                onSelectDetection={setSelectedDetection}
+                cards={cards}
+              />
+
+              {/* Processing indicator */}
+              {isProcessing && (
+                <div className="flex items-center justify-center gap-2 py-4">
+                  <Loader2 className="w-5 h-5 text-gold-400 animate-spin" />
+                  <span className="text-sm text-rift-300">Detecting cards...</span>
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          )}
 
-        {/* Empty state */}
-        {uploadedImage && !isProcessing && detections.length === 0 && (
-          <div className="text-center py-6">
-            <p className="text-sm text-rift-400">
-              No se detectaron cartas en esta imagen
-            </p>
-            <p className="text-xs text-rift-500 mt-1">
-              Prueba con una imagen mas clara o con mejor iluminacion
-            </p>
-          </div>
-        )}
+          {/* Detection results */}
+          {detections.length > 0 && (
+            <div className="space-y-3">
+              {/* Results header */}
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-rift-100">
+                  Results ({detections.length})
+                </h2>
+                <button
+                  onClick={() => runDetection(uploadedImage)}
+                  disabled={isProcessing}
+                  className="btn-ghost text-xs py-1 px-2 rounded-lg"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  Re-detect
+                </button>
+              </div>
+
+              {/* Bulk actions bar */}
+              {matchedCount > 0 && (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={toggleSelectAll}
+                    className="btn-ghost text-xs py-1.5 px-2.5 rounded-xl"
+                  >
+                    {allChecked ? (
+                      <CheckSquare className="w-3.5 h-3.5 text-gold-400" />
+                    ) : (
+                      <Square className="w-3.5 h-3.5" />
+                    )}
+                    {allChecked ? 'Deselect' : 'Select all'}
+                  </button>
+                  <div className="flex-1" />
+                  {checkedIndices.size > 0 && (
+                    <>
+                      <button
+                        onClick={addCheckedToScanner}
+                        className="btn-primary text-xs py-1.5 px-3 rounded-xl"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Add ({checkedIndices.size})
+                      </button>
+                      <button
+                        onClick={exportCheckedCSV}
+                        className="btn-secondary text-xs py-1.5 px-3 rounded-xl"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        CSV
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Detection cards */}
+              <div className="space-y-2">
+                {detections.map((det, idx) => {
+                  return (
+                    <CardDetailPanel
+                      key={idx}
+                      detection={det}
+                      index={idx}
+                      onAddToScanner={handleAddToScanner}
+                      cards={cards}
+                      isChecked={checkedIndices.has(idx)}
+                      onToggleCheck={() => toggleCheck(idx)}
+                      onMatchChange={handleMatchChange}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Empty state */}
+          {uploadedImage && !isProcessing && detections.length === 0 && (
+            <div className="text-center py-6">
+              <p className="text-sm text-rift-400">
+                No cards detected in this image
+              </p>
+              <p className="text-xs text-rift-500 mt-1">
+                Try with a clearer image or better lighting
+              </p>
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* Floating card counter */}
+      {!sheetExpanded && totalCards > 0 && (
+        <CardCounter
+          count={totalCards}
+          uniqueCount={scannedCards.length}
+          onTap={() => setSheetExpanded(true)}
+        />
+      )}
+
+      {/* Bottom sheet with card list */}
+      <ScannerBottomSheet
+        scannedCards={scannedCards}
+        onUpdateCard={onUpdateCard}
+        onRemoveCard={onRemoveCard}
+        onClearAll={onClearAll}
+        onExport={onExport}
+        cards={cards}
+        onAddCardFromSearch={onAddToScanner}
+        isExpanded={sheetExpanded}
+        onToggleExpand={() => setSheetExpanded(prev => !prev)}
+      />
     </div>
   );
 }

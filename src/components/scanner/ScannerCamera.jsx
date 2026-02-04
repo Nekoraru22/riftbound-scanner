@@ -106,7 +106,7 @@ export default function ScannerCamera({
               <div className="absolute -bottom-9 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-green-500/90 backdrop-blur-sm fade-in">
                 <Zap className="w-3 h-3 text-white" />
                 <span className="text-xs font-semibold text-white whitespace-nowrap">
-                  Carta detectada
+                  Card detected
                 </span>
               </div>
             )}
@@ -122,10 +122,10 @@ export default function ScannerCamera({
                 detectorState === 'error' ? 'bg-red-400' : 'bg-rift-500'
               }`} />
               <span className="text-[10px] font-medium text-white/80">
-                {isReady ? 'IA Lista' :
-                 detectorState === 'loading' ? 'Cargando...' :
-                 detectorState === 'warming' ? 'Calentando...' :
-                 detectorState === 'error' ? 'Error' : 'Inactivo'}
+                {isReady ? 'AI Ready' :
+                 detectorState === 'loading' ? 'Loading...' :
+                 detectorState === 'warming' ? 'Warming...' :
+                 detectorState === 'error' ? 'Error' : 'Inactive'}
               </span>
             </div>
 
@@ -144,7 +144,7 @@ export default function ScannerCamera({
           {!hasDetection && scanEnabled && (
             <div className="absolute bottom-20 left-4 right-4 text-center">
               <p className="text-xs text-white/50 font-body">
-                Coloca la carta dentro del marco
+                Place the card inside the frame
               </p>
             </div>
           )}
@@ -159,15 +159,15 @@ export default function ScannerCamera({
           </div>
           <div className="text-center px-8">
             <p className="text-base font-semibold text-rift-200 mb-1">
-              Camara desactivada
+              Camera disabled
             </p>
             <p className="text-sm text-rift-500">
-              Activa la camara para escanear cartas en tiempo real
+              Enable the camera to scan cards in real-time
             </p>
           </div>
           <button onClick={onStartCamera} className="btn-primary text-sm mt-1 px-6 py-3 rounded-xl">
             <Camera className="w-4 h-4" />
-            Activar Camara
+            Enable Camera
           </button>
         </div>
       )}
@@ -180,7 +180,7 @@ export default function ScannerCamera({
           </div>
           <p className="text-sm text-red-300 text-center font-body">{error}</p>
           <button onClick={onStartCamera} className="btn-secondary text-sm rounded-xl">
-            Reintentar
+            Retry
           </button>
         </div>
       )}

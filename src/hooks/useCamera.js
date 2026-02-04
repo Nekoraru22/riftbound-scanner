@@ -115,16 +115,16 @@ export function useCamera() {
 
 function getErrorMessage(err) {
   if (err.name === 'NotAllowedError') {
-    return 'Permiso de cámara denegado. Por favor, permite el acceso a la cámara en la configuración de tu navegador.';
+    return 'Camera permission denied. Please allow camera access in your browser settings.';
   }
   if (err.name === 'NotFoundError') {
-    return 'No se encontró ninguna cámara en este dispositivo.';
+    return 'No camera found on this device.';
   }
   if (err.name === 'NotReadableError') {
-    return 'La cámara está siendo usada por otra aplicación.';
+    return 'Camera is being used by another application.';
   }
   if (err.name === 'OverconstrainedError') {
-    return 'La cámara no soporta la resolución solicitada.';
+    return 'Camera does not support the requested resolution.';
   }
-  return `Error de cámara: ${err.message}`;
+  return `Camera error: ${err.message}`;
 }

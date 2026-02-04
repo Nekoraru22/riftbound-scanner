@@ -55,10 +55,10 @@ export default function ImageDropZone({ onImageSelected, isProcessing }) {
       </div>
       <div className="text-center">
         <p className="text-sm font-medium text-rift-200">
-          {isDragOver ? 'Suelta la imagen aqui' : 'Sube una imagen'}
+          {isDragOver ? 'Drop image here' : 'Upload an image'}
         </p>
         <p className="text-xs text-rift-500 mt-1">
-          Arrastra o toca para seleccionar
+          Drag or tap to select
         </p>
       </div>
 

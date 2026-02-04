@@ -3,10 +3,10 @@ import { Zap, Database, Brain, ScanLine, CheckCircle2 } from 'lucide-react';
 
 export default function LoadingScreen({ progress, stage }) {
   const stages = [
-    { key: 'db', label: 'Cargando base de datos...', icon: Database },
-    { key: 'model', label: 'Calentando modelo de IA...', icon: Brain },
-    { key: 'matcher', label: 'Preparando identificador...', icon: ScanLine },
-    { key: 'ready', label: 'Listo para escanear!', icon: CheckCircle2 },
+    { key: 'db', label: 'Loading database...', icon: Database },
+    { key: 'model', label: 'Warming up AI model...', icon: Brain },
+    { key: 'matcher', label: 'Preparing identifier...', icon: ScanLine },
+    { key: 'ready', label: 'Ready to scan!', icon: CheckCircle2 },
   ];
 
   const currentIndex = stages.findIndex(s => s.key === stage);
@@ -70,8 +70,8 @@ export default function LoadingScreen({ progress, stage }) {
 
       {/* Disclaimer */}
       <p className="absolute bottom-6 text-[10px] text-rift-600 text-center px-8 max-w-sm">
-        Creado bajo la política "Legal Jibber Jabber" de Riot Games.
-        Riot Games no respalda ni patrocina este proyecto.
+        Created under Riot Games' "Legal Jibber Jabber" policy.
+        Riot Games does not endorse or sponsor this project.
       </p>
     </div>
   );

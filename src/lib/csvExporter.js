@@ -123,13 +123,13 @@ export function validateForExport(cards) {
   for (let i = 0; i < cards.length; i++) {
     const card = cards[i];
     if (!card.cardData?.name) {
-      errors.push(`Fila ${i + 1}: Falta nombre de carta`);
+      errors.push(`Row ${i + 1}: Missing card name`);
     }
     if (!card.cardData?.collectorNumber) {
-      errors.push(`Fila ${i + 1}: Falta número de coleccionista`);
+      errors.push(`Row ${i + 1}: Missing collector number`);
     }
     if (!card.quantity || card.quantity < 1) {
-      errors.push(`Fila ${i + 1}: Cantidad inválida`);
+      errors.push(`Row ${i + 1}: Invalid quantity`);
     }
   }
 

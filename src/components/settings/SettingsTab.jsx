@@ -11,24 +11,24 @@ export default function SettingsTab({
       <div className="px-4 pt-5 pb-4 space-y-4">
         {/* Page title */}
         <div className="mb-2">
-          <h1 className="text-xl font-display font-bold text-rift-100">Ajustes</h1>
-          <p className="text-xs text-rift-400 mt-1">Configura los valores por defecto y opciones de la app</p>
+          <h1 className="text-xl font-display font-bold text-rift-100">Settings</h1>
+          <p className="text-xs text-rift-400 mt-1">Configure default values and app options</p>
         </div>
 
         {/* Batch Defaults Section */}
         <section className="rounded-2xl bg-rift-800/60 border border-rift-600/20 p-5 space-y-4">
           <h2 className="text-sm font-semibold text-rift-100 flex items-center gap-2">
             <Shield className="w-4 h-4 text-gold-400" />
-            Valores por defecto
+            Default Values
           </h2>
           <p className="text-xs text-rift-400">
-            Se aplicaran automaticamente a las nuevas cartas escaneadas.
+            Will be applied automatically to new scanned cards.
           </p>
 
           {/* Condition */}
           <div>
             <label className="text-[11px] font-medium text-rift-300 uppercase tracking-wider mb-1.5 block">
-              Estado
+              Condition
             </label>
             <select
               value={batchDefaults.condition}
@@ -44,7 +44,7 @@ export default function SettingsTab({
           {/* Language */}
           <div>
             <label className="text-[11px] font-medium text-rift-300 uppercase tracking-wider mb-1.5 block">
-              Idioma
+              Language
             </label>
             <select
               value={batchDefaults.language}
@@ -71,7 +71,7 @@ export default function SettingsTab({
               }`}
             >
               <Sparkles className="w-4 h-4" />
-              {batchDefaults.foil ? 'Todas Foil' : 'No Foil'}
+              {batchDefaults.foil ? 'All Foil' : 'No Foil'}
             </button>
           </div>
 
@@ -85,7 +85,7 @@ export default function SettingsTab({
             className="btn-ghost w-full text-xs text-rift-400 rounded-xl"
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            Restaurar valores predeterminados
+            Restore defaults
           </button>
         </section>
 
@@ -93,7 +93,7 @@ export default function SettingsTab({
         <section className="rounded-2xl bg-rift-800/60 border border-rift-600/20 p-5 space-y-3">
           <h2 className="text-sm font-semibold text-rift-100 flex items-center gap-2">
             <Info className="w-4 h-4 text-gold-400" />
-            Acerca de
+            About
           </h2>
 
           <div className="flex items-center gap-3">
@@ -107,14 +107,14 @@ export default function SettingsTab({
           </div>
 
           <p className="text-xs text-rift-400 leading-relaxed">
-            Escaner de cartas RiftBound TCG con reconocimiento visual en tiempo real
-            mediante inteligencia artificial (YOLO11 + pHash).
+            RiftBound TCG card scanner with real-time visual recognition
+            using artificial intelligence (YOLO11 + pHash).
           </p>
 
           <div className="p-3 rounded-xl bg-rift-700/40 border border-rift-600/20">
             <p className="text-[10px] text-rift-500 leading-relaxed">
-              Creado bajo la politica "Legal Jibber Jabber" de Riot Games.
-              Riot Games no respalda ni patrocina este proyecto.
+              Created under Riot Games' "Legal Jibber Jabber" policy.
+              Riot Games does not endorse or sponsor this project.
             </p>
           </div>
         </section>

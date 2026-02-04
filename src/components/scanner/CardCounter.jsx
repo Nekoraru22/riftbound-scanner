@@ -13,7 +13,7 @@ export default function CardCounter({ count, uniqueCount, onTap }) {
       <div className="flex items-baseline gap-1">
         <span className="text-sm font-bold text-rift-100">{count}</span>
         <span className="text-[10px] text-rift-400">
-          ({uniqueCount} {uniqueCount === 1 ? 'unica' : 'unicas'})
+          ({uniqueCount} unique)
         </span>
       </div>
     </button>

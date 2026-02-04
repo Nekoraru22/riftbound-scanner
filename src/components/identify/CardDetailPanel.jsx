@@ -1,12 +1,38 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronDown, Plus, Check, CheckSquare, Square } from 'lucide-react';
+import { ChevronDown, Plus, CheckSquare, Square } from 'lucide-react';
 import { DOMAIN_COLORS, RARITY_STYLES } from '../../data/sampleCards.js';
+
+/**
+ * Build a card data object from the matcher's match data.
+ * If the main database (cards) has a matching entry with the SAME name, use it
+ * for extra metadata (domain, rarity, type). Otherwise build from matcher data only.
+ */
+function resolveCardData(activeMatch, cards) {
+  if (!activeMatch) return null;
+
+  // Try to find in main database — only trust it if the name matches
+  const dbCard = cards.find(c => c.id === activeMatch.id);
+  if (dbCard && dbCard.name === activeMatch.name) {
+    return dbCard;
+  }
+
+  // Build from matcher data; extract collector number from ID (format: set-NNN-total)
+  const idParts = activeMatch.id.split('-');
+  const collectorNumber = idParts.length >= 2 ? idParts[1] : '000';
+
+  return {
+    id: activeMatch.id,
+    name: activeMatch.name,
+    collectorNumber,
+    set: activeMatch.set,
+    setName: activeMatch.set,
+  };
+}
 
 export default function CardDetailPanel({
   detection,
   index,
   onAddToScanner,
-  isInScannerList,
   cards,
   isChecked,
   onToggleCheck,
@@ -39,10 +65,10 @@ export default function CardDetailPanel({
     }
   }, [activeCardId, index]);
 
-  // Look up full card data for the active match
-  const fullCardData = activeCardId ? cards.find(c => c.id === activeCardId) : null;
-  const domainStyle = fullCardData ? (DOMAIN_COLORS[fullCardData.domain] || DOMAIN_COLORS.Fury) : null;
-  const rarityStyle = fullCardData ? (RARITY_STYLES[fullCardData.rarity] || RARITY_STYLES.Common) : null;
+  // Resolve card data from matcher match + optional DB lookup (only if names match)
+  const cardData = resolveCardData(activeMatch, cards);
+  const domainStyle = cardData?.domain ? (DOMAIN_COLORS[cardData.domain] || DOMAIN_COLORS.Fury) : null;
+  const rarityStyle = cardData?.rarity ? (RARITY_STYLES[cardData.rarity] || RARITY_STYLES.Common) : null;
 
   const confidenceColor = similarity >= 0.85 ? 'text-green-400 bg-green-400/10'
     : 'text-yellow-400 bg-yellow-400/10';
@@ -87,11 +113,11 @@ export default function CardDetailPanel({
           {/* Info */}
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-rift-100 truncate">
-              {fullCardData ? fullCardData.name : (activeMatch ? activeMatch.name : `Deteccion #${index + 1}`)}
+              {activeMatch ? activeMatch.name : `Detection #${index + 1}`}
             </p>
-            {fullCardData && (
+            {cardData && (
               <p className="text-[10px] text-rift-400 truncate">
-                {fullCardData.set} · #{fullCardData.collectorNumber}
+                {cardData.set} · #{cardData.collectorNumber}
               </p>
             )}
           </div>
@@ -122,43 +148,45 @@ export default function CardDetailPanel({
           )}
 
           {/* Card details */}
-          {fullCardData && (
+          {cardData && (
             <div className="space-y-3">
               {/* Name and set */}
               <div>
-                <h3 className="text-base font-bold text-rift-100">{fullCardData.name}</h3>
-                <p className="text-xs text-rift-400">{fullCardData.setName} ({fullCardData.set}) · #{fullCardData.collectorNumber}</p>
+                <h3 className="text-base font-bold text-rift-100">{cardData.name}</h3>
+                <p className="text-xs text-rift-400">{cardData.setName} ({cardData.set}) · #{cardData.collectorNumber}</p>
               </div>
 
-              {/* Properties grid */}
-              <div className="grid grid-cols-3 gap-2">
-                <div className="rounded-xl bg-rift-700/50 p-2.5 text-center">
-                  <p className="text-[9px] text-rift-500 uppercase tracking-wider mb-1">Dominio</p>
-                  <div className="flex items-center justify-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: domainStyle?.hex }} />
-                    <span className={`text-xs font-semibold ${domainStyle?.text || 'text-rift-200'}`}>
-                      {fullCardData.domain}
+              {/* Properties grid — only when metadata is available */}
+              {cardData.domain && (
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="rounded-xl bg-rift-700/50 p-2.5 text-center">
+                    <p className="text-[9px] text-rift-500 uppercase tracking-wider mb-1">Domain</p>
+                    <div className="flex items-center justify-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: domainStyle?.hex }} />
+                      <span className={`text-xs font-semibold ${domainStyle?.text || 'text-rift-200'}`}>
+                        {cardData.domain}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="rounded-xl bg-rift-700/50 p-2.5 text-center">
+                    <p className="text-[9px] text-rift-500 uppercase tracking-wider mb-1">Rarity</p>
+                    <span className={`text-xs font-semibold ${rarityStyle?.color || 'text-rift-200'}`}>
+                      {cardData.rarity}
+                    </span>
+                  </div>
+                  <div className="rounded-xl bg-rift-700/50 p-2.5 text-center">
+                    <p className="text-[9px] text-rift-500 uppercase tracking-wider mb-1">Type</p>
+                    <span className="text-xs font-semibold text-rift-200">
+                      {cardData.type}
                     </span>
                   </div>
                 </div>
-                <div className="rounded-xl bg-rift-700/50 p-2.5 text-center">
-                  <p className="text-[9px] text-rift-500 uppercase tracking-wider mb-1">Rareza</p>
-                  <span className={`text-xs font-semibold ${rarityStyle?.color || 'text-rift-200'}`}>
-                    {fullCardData.rarity}
-                  </span>
-                </div>
-                <div className="rounded-xl bg-rift-700/50 p-2.5 text-center">
-                  <p className="text-[9px] text-rift-500 uppercase tracking-wider mb-1">Tipo</p>
-                  <span className="text-xs font-semibold text-rift-200">
-                    {fullCardData.type}
-                  </span>
-                </div>
-              </div>
+              )}
 
               {/* Confidence bar */}
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] text-rift-500 uppercase tracking-wider">Confianza</span>
+                  <span className="text-[10px] text-rift-500 uppercase tracking-wider">Confidence</span>
                   <span className={`text-xs font-bold ${
                     similarity >= 0.85 ? 'text-green-400' : 'text-yellow-400'
                   }`}>
@@ -182,7 +210,7 @@ export default function CardDetailPanel({
           {top3.length > 0 && (
             <div>
               <p className="text-[10px] text-rift-500 uppercase tracking-wider mb-2">
-                Mejores coincidencias — toca para cambiar
+                Best matches — tap to change
               </p>
               <div className="space-y-1.5">
                 {top3.map((match, i) => {
@@ -227,27 +255,13 @@ export default function CardDetailPanel({
           )}
 
           {/* Add to scanner button */}
-          {fullCardData && (
+          {cardData && (
             <button
-              onClick={() => onAddToScanner(fullCardData)}
-              disabled={isInScannerList}
-              className={`w-full py-2.5 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-all ${
-                isInScannerList
-                  ? 'bg-green-500/10 border border-green-500/30 text-green-400 cursor-default'
-                  : 'btn-primary'
-              }`}
+              onClick={() => onAddToScanner(cardData)}
+              className="w-full py-2.5 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-all btn-primary"
             >
-              {isInScannerList ? (
-                <>
-                  <Check className="w-4 h-4" />
-                  Anadida al escaner
-                </>
-              ) : (
-                <>
-                  <Plus className="w-4 h-4" />
-                  Anadir al escaner
-                </>
-              )}
+              <Plus className="w-4 h-4" />
+              Add to scanner
             </button>
           )}
 
@@ -255,7 +269,7 @@ export default function CardDetailPanel({
           {!hasMatch && (
             <div className="text-center py-2">
               <p className="text-xs text-rift-500">
-                No se encontro una coincidencia confiable para esta deteccion.
+                No reliable match found for this detection.
               </p>
             </div>
           )}

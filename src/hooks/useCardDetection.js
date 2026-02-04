@@ -24,6 +24,18 @@ export function useCardDetection({ referenceHashes = [], cards = [], enabled = f
   const frameCountRef = useRef(0);
   const fpsTimerRef = useRef(Date.now());
 
+  // Refs to avoid stale closures in scan loop
+  const enabledRef = useRef(enabled);
+  const referenceHashesRef = useRef(referenceHashes);
+  const cardsRef = useRef(cards);
+  const captureFrameRef = useRef(null);
+  const onCardDetectedRef = useRef(null);
+
+  // Keep refs synced with latest values
+  useEffect(() => { enabledRef.current = enabled; }, [enabled]);
+  useEffect(() => { referenceHashesRef.current = referenceHashes; }, [referenceHashes]);
+  useEffect(() => { cardsRef.current = cards; }, [cards]);
+
   // Cooldown between matching the same card (ms)
   const MATCH_COOLDOWN = 2000;
   // Min time between scans (ms) - controls scan rate
@@ -57,7 +69,7 @@ export function useCardDetection({ referenceHashes = [], cards = [], enabled = f
     if (!detectorRef.current || detectorRef.current.state !== DetectorState.READY) {
       return null;
     }
-    if (!referenceHashes.length) return null;
+    if (!referenceHashesRef.current.length) return null;
 
     try {
       // Step 1: YOLO detection
@@ -77,8 +89,8 @@ export function useCardDetection({ referenceHashes = [], cards = [], enabled = f
       const imageData = ctx.getImageData(0, 0, crop.width, crop.height);
       const queryHash = computePHash(imageData.data, crop.width, crop.height);
 
-      // Step 3: Match against reference database
-      const { match, distance } = findBestMatch(queryHash, referenceHashes, MATCH_THRESHOLD);
+      // Step 3: Match against reference database (use ref for latest data)
+      const { match, distance } = findBestMatch(queryHash, referenceHashesRef.current, MATCH_THRESHOLD);
 
       if (!match) {
         setLastDetection({
@@ -96,8 +108,8 @@ export function useCardDetection({ referenceHashes = [], cards = [], enabled = f
         return null; // Same card, within cooldown
       }
 
-      // Find the full card data
-      const cardData = cards.find(c => c.id === match.cardId);
+      // Find the full card data (use ref for latest data)
+      const cardData = cardsRef.current.find(c => c.id === match.cardId);
       if (!cardData) return null;
 
       // Update tracking
@@ -115,22 +127,12 @@ export function useCardDetection({ referenceHashes = [], cards = [], enabled = f
       };
 
       setLastDetection(result);
-
-      // Update FPS counter
-      frameCountRef.current++;
-      const elapsed = now - fpsTimerRef.current;
-      if (elapsed >= 1000) {
-        setFps(Math.round((frameCountRef.current * 1000) / elapsed));
-        frameCountRef.current = 0;
-        fpsTimerRef.current = now;
-      }
-
       return result;
     } catch (error) {
       console.error('[Detection] Frame processing error:', error);
       return null;
     }
-  }, [referenceHashes, cards]);
+  }, []);
 
   /**
    * Start continuous scanning loop
@@ -139,27 +141,42 @@ export function useCardDetection({ referenceHashes = [], cards = [], enabled = f
    */
   const startScanning = useCallback((captureFrame, onCardDetected) => {
     if (scanLoopRef.current) return;
+
+    // Store callbacks in refs so scan loop always uses latest
+    captureFrameRef.current = captureFrame;
+    onCardDetectedRef.current = onCardDetected;
     setIsScanning(true);
 
     const scanLoop = async () => {
-      if (!enabled) {
+      // Use refs to avoid stale closures
+      if (!enabledRef.current) {
         scanLoopRef.current = setTimeout(scanLoop, SCAN_INTERVAL);
         return;
       }
 
-      const frame = captureFrame();
+      const frame = captureFrameRef.current?.();
       if (frame) {
         const result = await processFrame(frame);
         if (result && result.matched) {
-          onCardDetected(result);
+          onCardDetectedRef.current?.(result);
         }
+      }
+
+      // Update FPS counter on every scan cycle
+      frameCountRef.current++;
+      const now = Date.now();
+      const elapsed = now - fpsTimerRef.current;
+      if (elapsed >= 1000) {
+        setFps(Math.round((frameCountRef.current * 1000) / elapsed));
+        frameCountRef.current = 0;
+        fpsTimerRef.current = now;
       }
 
       scanLoopRef.current = setTimeout(scanLoop, SCAN_INTERVAL);
     };
 
     scanLoop();
-  }, [enabled, processFrame]);
+  }, [processFrame]);
 
   /**
    * Stop scanning loop
@@ -190,6 +207,14 @@ export function useCardDetection({ referenceHashes = [], cards = [], enabled = f
     };
   }, []);
 
+  /**
+   * Update stored callbacks (call when handlers change)
+   */
+  const updateCallbacks = useCallback((captureFrame, onCardDetected) => {
+    if (captureFrame) captureFrameRef.current = captureFrame;
+    if (onCardDetected) onCardDetectedRef.current = onCardDetected;
+  }, []);
+
   return {
     detectorState,
     isScanning,
@@ -200,5 +225,6 @@ export function useCardDetection({ referenceHashes = [], cards = [], enabled = f
     startScanning,
     stopScanning,
     resetCooldown,
+    updateCallbacks,
   };
 }

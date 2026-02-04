@@ -88,6 +88,46 @@ export default function App() {
     init();
   }, []);
 
+  // ─── Batch defaults ref (for use in callbacks without stale closures) ──
+  const batchDefaultsRef = useRef(batchDefaults);
+  useEffect(() => { batchDefaultsRef.current = batchDefaults; }, [batchDefaults]);
+
+  // ─── Card Detection Handler ────────────────────────────────
+  // Uses functional setState to avoid stale closure on scannedCards
+  const handleCardDetected = useCallback((result) => {
+    const { cardData, confidence, distance, timestamp } = result;
+
+    setScannedCards(prev => {
+      const existingIndex = prev.findIndex(c => c.cardData.id === cardData.id);
+      if (existingIndex >= 0) {
+        const updated = [...prev];
+        updated[existingIndex] = {
+          ...updated[existingIndex],
+          quantity: updated[existingIndex].quantity + 1,
+        };
+        showNotification(`${cardData.name} — qty +1`, 'success');
+        return updated;
+      } else {
+        const defaults = batchDefaultsRef.current;
+        showNotification(`+ ${cardData.name}`, 'success');
+        return [...prev, {
+          cardData,
+          quantity: 1,
+          condition: defaults.condition,
+          language: defaults.language,
+          foil: defaults.foil,
+          confidence,
+          matchDistance: distance,
+          scanTimestamp: timestamp,
+        }];
+      }
+    });
+
+    if (navigator.vibrate) {
+      navigator.vibrate(50);
+    }
+  }, []);
+
   // ─── Start scanning when camera is active ──────────────────
   useEffect(() => {
     if (camera.isActive && detection.detectorState === 'ready' && activeTab === 'scanner') {
@@ -98,44 +138,10 @@ export default function App() {
     };
   }, [camera.isActive, detection.detectorState, activeTab]);
 
-  // ─── Card Detection Handler ────────────────────────────────
-  const handleCardDetected = useCallback((result) => {
-    const { cardData, confidence, distance, timestamp } = result;
-
-    const existingIndex = scannedCards.findIndex(
-      c => c.cardData.id === cardData.id
-    );
-
-    if (existingIndex >= 0) {
-      setScannedCards(prev => {
-        const updated = [...prev];
-        updated[existingIndex] = {
-          ...updated[existingIndex],
-          quantity: updated[existingIndex].quantity + 1,
-        };
-        return updated;
-      });
-      showNotification(`${cardData.name} — cantidad +1`, 'success');
-    } else {
-      const newEntry = {
-        cardData,
-        quantity: 1,
-        condition: batchDefaults.condition,
-        language: batchDefaults.language,
-        foil: batchDefaults.foil,
-        confidence,
-        matchDistance: distance,
-        scanTimestamp: timestamp,
-      };
-
-      setScannedCards(prev => [...prev, newEntry]);
-      showNotification(`+ ${cardData.name}`, 'success');
-    }
-
-    if (navigator.vibrate) {
-      navigator.vibrate(50);
-    }
-  }, [scannedCards, batchDefaults]);
+  // Keep scan loop callbacks up-to-date
+  useEffect(() => {
+    detection.updateCallbacks(camera.captureFrame, handleCardDetected);
+  }, [camera.captureFrame, handleCardDetected]);
 
   // ─── Card Management ───────────────────────────────────────
   const handleUpdateCard = useCallback((index, updatedCard) => {
@@ -151,39 +157,43 @@ export default function App() {
   }, []);
 
   const handleClearAll = useCallback(() => {
-    if (scannedCards.length > 0 && confirm('Eliminar todas las cartas escaneadas?')) {
-      setScannedCards([]);
-      detection.resetCooldown();
-    }
-  }, [scannedCards.length]);
+    setScannedCards(prev => {
+      if (prev.length > 0 && confirm('Delete all scanned cards?')) {
+        detection.resetCooldown();
+        return [];
+      }
+      return prev;
+    });
+  }, []);
 
+  // Uses functional setState to avoid stale closure — fixes "add all adds only 1"
   const handleAddCardFromSearch = useCallback((cardData) => {
-    const existingIndex = scannedCards.findIndex(c => c.cardData.id === cardData.id);
-    if (existingIndex >= 0) {
-      setScannedCards(prev => {
+    setScannedCards(prev => {
+      const existingIndex = prev.findIndex(c => c.cardData.id === cardData.id);
+      if (existingIndex >= 0) {
         const updated = [...prev];
         updated[existingIndex] = {
           ...updated[existingIndex],
           quantity: updated[existingIndex].quantity + 1,
         };
+        showNotification(`${cardData.name} — qty +1`, 'success');
         return updated;
-      });
-      showNotification(`${cardData.name} — cantidad +1`, 'success');
-    } else {
-      const newEntry = {
-        cardData,
-        quantity: 1,
-        condition: batchDefaults.condition,
-        language: batchDefaults.language,
-        foil: batchDefaults.foil,
-        confidence: 1,
-        matchDistance: 0,
-        scanTimestamp: Date.now(),
-      };
-      setScannedCards(prev => [...prev, newEntry]);
-      showNotification(`+ ${cardData.name}`, 'success');
-    }
-  }, [batchDefaults, scannedCards]);
+      } else {
+        const defaults = batchDefaultsRef.current;
+        showNotification(`+ ${cardData.name}`, 'success');
+        return [...prev, {
+          cardData,
+          quantity: 1,
+          condition: defaults.condition,
+          language: defaults.language,
+          foil: defaults.foil,
+          confidence: 1,
+          matchDistance: 0,
+          scanTimestamp: Date.now(),
+        }];
+      }
+    });
+  }, []);
 
   // ─── CSV Export ────────────────────────────────────────────
   const handleExport = useCallback(() => {
@@ -195,7 +205,7 @@ export default function App() {
 
     const success = downloadCSV(scannedCards);
     if (success) {
-      showNotification(`CSV exportado — ${scannedCards.length} cartas`, 'success');
+      showNotification(`CSV exported — ${scannedCards.length} cards`, 'success');
     }
   }, [scannedCards]);
 
@@ -249,7 +259,12 @@ export default function App() {
             cards={cards}
             scannedCards={scannedCards}
             onAddToScanner={handleAddCardFromSearch}
+            onUpdateCard={handleUpdateCard}
+            onRemoveCard={handleRemoveCard}
+            onClearAll={handleClearAll}
+            onExport={handleExport}
             showNotification={showNotification}
+            batchDefaults={batchDefaults}
           />
         )}
 

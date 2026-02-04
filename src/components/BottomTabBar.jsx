@@ -2,9 +2,9 @@ import React from 'react';
 import { Camera, ScanLine, Settings } from 'lucide-react';
 
 const TABS = [
-  { id: 'scanner', label: 'Escaner', icon: Camera },
-  { id: 'identify', label: 'Identificar', icon: ScanLine },
-  { id: 'settings', label: 'Ajustes', icon: Settings },
+  { id: 'scanner', label: 'Scanner', icon: Camera },
+  { id: 'identify', label: 'Identify', icon: ScanLine },
+  { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
 export default function BottomTabBar({ activeTab, onTabChange, scannedCount }) {
