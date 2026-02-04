@@ -1,11 +1,12 @@
 import React from 'react';
-import { Zap, Database, Brain, CheckCircle2 } from 'lucide-react';
+import { Zap, Database, Brain, ScanLine, CheckCircle2 } from 'lucide-react';
 
 export default function LoadingScreen({ progress, stage }) {
   const stages = [
     { key: 'db', label: 'Cargando base de datos...', icon: Database },
     { key: 'model', label: 'Calentando modelo de IA...', icon: Brain },
-    { key: 'ready', label: '¡Listo para escanear!', icon: CheckCircle2 },
+    { key: 'matcher', label: 'Preparando identificador...', icon: ScanLine },
+    { key: 'ready', label: 'Listo para escanear!', icon: CheckCircle2 },
   ];
 
   const currentIndex = stages.findIndex(s => s.key === stage);

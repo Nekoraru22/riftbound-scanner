@@ -1,14 +1,16 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import Header from './components/Header.jsx';
-import CameraViewer from './components/CameraViewer.jsx';
-import ReviewQueue from './components/ReviewQueue.jsx';
-import BatchSettings from './components/BatchSettings.jsx';
+import AppShell from './components/AppShell.jsx';
+import BottomTabBar from './components/BottomTabBar.jsx';
+import ToastNotification from './components/ToastNotification.jsx';
 import LoadingScreen from './components/LoadingScreen.jsx';
+import ScannerTab from './components/scanner/ScannerTab.jsx';
+import IdentifyTab from './components/identify/IdentifyTab.jsx';
+import SettingsTab from './components/settings/SettingsTab.jsx';
 import { useCamera } from './hooks/useCamera.js';
 import { useCardDetection } from './hooks/useCardDetection.js';
 import { initializeDatabase } from './lib/cardDatabase.js';
 import { downloadCSV, validateForExport } from './lib/csvExporter.js';
-import { getHashCount } from './lib/indexedDB.js';
+import { getMatcher } from './lib/cardMatcher.js';
 
 export default function App() {
   // ─── App State ─────────────────────────────────────────────
@@ -19,16 +21,14 @@ export default function App() {
   // Card database
   const [cards, setCards] = useState([]);
   const [referenceHashes, setReferenceHashes] = useState([]);
-  const [hashCount, setHashCount] = useState(0);
+
 
   // Scanning
   const [scanEnabled, setScanEnabled] = useState(true);
   const [scannedCards, setScannedCards] = useState([]);
 
   // UI
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState('batch');
-  const [queueExpanded, setQueueExpanded] = useState(true);
+  const [activeTab, setActiveTab] = useState('scanner');
   const [notification, setNotification] = useState(null);
 
   // Batch defaults
@@ -44,7 +44,7 @@ export default function App() {
   const detection = useCardDetection({
     referenceHashes,
     cards,
-    enabled: scanEnabled && camera.isActive,
+    enabled: scanEnabled && camera.isActive && activeTab === 'scanner',
   });
 
   // ─── Initialization ────────────────────────────────────────
@@ -54,26 +54,34 @@ export default function App() {
         // Stage 1: Load card database
         setLoadStage('db');
         const { cards: loadedCards, hashes } = await initializeDatabase({
-          onProgress: (p) => setLoadProgress(p * 0.6),
+          onProgress: (p) => setLoadProgress(p * 0.5),
         });
         setCards(loadedCards);
         setReferenceHashes(hashes);
-        setHashCount(hashes.length);
+
 
         // Stage 2: Initialize YOLO detector (warmup)
         setLoadStage('model');
-        setLoadProgress(0.6);
+        setLoadProgress(0.5);
         await detection.initDetector();
-        setLoadProgress(0.9);
+        setLoadProgress(0.75);
+
+        // Stage 3: Initialize card matcher
+        setLoadStage('matcher');
+        try {
+          await getMatcher().initialize();
+        } catch (e) {
+          console.warn('[App] CardMatcher init failed (identify tab will be limited):', e);
+        }
+        setLoadProgress(0.95);
 
         // Done
         setLoadStage('ready');
         setLoadProgress(1);
-        await new Promise(r => setTimeout(r, 600));
+        await new Promise(r => setTimeout(r, 500));
         setIsLoading(false);
       } catch (error) {
         console.error('[App] Initialization error:', error);
-        // Continue anyway with available data
         setIsLoading(false);
       }
     }
@@ -82,25 +90,23 @@ export default function App() {
 
   // ─── Start scanning when camera is active ──────────────────
   useEffect(() => {
-    if (camera.isActive && detection.detectorState === 'ready') {
+    if (camera.isActive && detection.detectorState === 'ready' && activeTab === 'scanner') {
       detection.startScanning(camera.captureFrame, handleCardDetected);
     }
     return () => {
       detection.stopScanning();
     };
-  }, [camera.isActive, detection.detectorState]);
+  }, [camera.isActive, detection.detectorState, activeTab]);
 
   // ─── Card Detection Handler ────────────────────────────────
   const handleCardDetected = useCallback((result) => {
     const { cardData, confidence, distance, timestamp } = result;
 
-    // Check if this card is already in the queue
     const existingIndex = scannedCards.findIndex(
       c => c.cardData.id === cardData.id
     );
 
     if (existingIndex >= 0) {
-      // Increment quantity of existing card
       setScannedCards(prev => {
         const updated = [...prev];
         updated[existingIndex] = {
@@ -111,7 +117,6 @@ export default function App() {
       });
       showNotification(`${cardData.name} — cantidad +1`, 'success');
     } else {
-      // Add new card with batch defaults
       const newEntry = {
         cardData,
         quantity: 1,
@@ -124,19 +129,13 @@ export default function App() {
       };
 
       setScannedCards(prev => [...prev, newEntry]);
-      showNotification(`✓ ${cardData.name}`, 'success');
-
-      // Auto-expand queue if collapsed
-      if (!queueExpanded) {
-        setQueueExpanded(true);
-      }
+      showNotification(`+ ${cardData.name}`, 'success');
     }
 
-    // Haptic feedback (mobile)
     if (navigator.vibrate) {
       navigator.vibrate(50);
     }
-  }, [scannedCards, batchDefaults, queueExpanded]);
+  }, [scannedCards, batchDefaults]);
 
   // ─── Card Management ───────────────────────────────────────
   const handleUpdateCard = useCallback((index, updatedCard) => {
@@ -152,31 +151,39 @@ export default function App() {
   }, []);
 
   const handleClearAll = useCallback(() => {
-    if (scannedCards.length > 0 && confirm('¿Eliminar todas las cartas escaneadas?')) {
+    if (scannedCards.length > 0 && confirm('Eliminar todas las cartas escaneadas?')) {
       setScannedCards([]);
       detection.resetCooldown();
     }
   }, [scannedCards.length]);
 
-  const handleManualAdd = useCallback(() => {
-    setSettingsTab('search');
-    setSettingsOpen(true);
-  }, []);
-
   const handleAddCardFromSearch = useCallback((cardData) => {
-    const newEntry = {
-      cardData,
-      quantity: 1,
-      condition: batchDefaults.condition,
-      language: batchDefaults.language,
-      foil: batchDefaults.foil,
-      confidence: 1,
-      matchDistance: 0,
-      scanTimestamp: Date.now(),
-    };
-    setScannedCards(prev => [...prev, newEntry]);
-    showNotification(`+ ${cardData.name}`, 'success');
-  }, [batchDefaults]);
+    const existingIndex = scannedCards.findIndex(c => c.cardData.id === cardData.id);
+    if (existingIndex >= 0) {
+      setScannedCards(prev => {
+        const updated = [...prev];
+        updated[existingIndex] = {
+          ...updated[existingIndex],
+          quantity: updated[existingIndex].quantity + 1,
+        };
+        return updated;
+      });
+      showNotification(`${cardData.name} — cantidad +1`, 'success');
+    } else {
+      const newEntry = {
+        cardData,
+        quantity: 1,
+        condition: batchDefaults.condition,
+        language: batchDefaults.language,
+        foil: batchDefaults.foil,
+        confidence: 1,
+        matchDistance: 0,
+        scanTimestamp: Date.now(),
+      };
+      setScannedCards(prev => [...prev, newEntry]);
+      showNotification(`+ ${cardData.name}`, 'success');
+    }
+  }, [batchDefaults, scannedCards]);
 
   // ─── CSV Export ────────────────────────────────────────────
   const handleExport = useCallback(() => {
@@ -216,66 +223,53 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-full bg-rift-900 overflow-hidden">
-      {/* Header */}
-      <Header
-        detectorState={detection.detectorState}
-        dbStatus="loaded"
-        cardCount={cards.length}
-        hashCount={hashCount}
-        onOpenSettings={() => { setSettingsTab('batch'); setSettingsOpen(true); }}
+    <AppShell>
+      {/* Tab content */}
+      <div className="flex-1 flex flex-col min-h-0">
+        {activeTab === 'scanner' && (
+          <ScannerTab
+            camera={camera}
+            detection={detection}
+            scanEnabled={scanEnabled}
+            scannedCards={scannedCards}
+            onToggleScanning={toggleScanning}
+            onUpdateCard={handleUpdateCard}
+            onRemoveCard={handleRemoveCard}
+            onClearAll={handleClearAll}
+            onExport={handleExport}
+            onAddCardFromSearch={handleAddCardFromSearch}
+            cards={cards}
+            batchDefaults={batchDefaults}
+            showNotification={showNotification}
+          />
+        )}
+
+        {activeTab === 'identify' && (
+          <IdentifyTab
+            cards={cards}
+            scannedCards={scannedCards}
+            onAddToScanner={handleAddCardFromSearch}
+            showNotification={showNotification}
+          />
+        )}
+
+        {activeTab === 'settings' && (
+          <SettingsTab
+            batchDefaults={batchDefaults}
+            onUpdateDefaults={setBatchDefaults}
+          />
+        )}
+      </div>
+
+      {/* Bottom navigation */}
+      <BottomTabBar
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        scannedCount={scannedCards.reduce((sum, c) => sum + c.quantity, 0)}
       />
 
-      {/* Camera */}
-      <CameraViewer
-        videoRef={camera.videoRef}
-        isActive={camera.isActive}
-        error={camera.error}
-        isScanning={detection.isScanning}
-        lastDetection={detection.lastDetection}
-        fps={detection.fps}
-        onStartCamera={camera.startCamera}
-        onStopCamera={camera.stopCamera}
-        onToggleFacing={camera.toggleFacing}
-        onToggleScanning={toggleScanning}
-        scanEnabled={scanEnabled}
-      />
-
-      {/* Review Queue */}
-      <ReviewQueue
-        scannedCards={scannedCards}
-        onUpdateCard={handleUpdateCard}
-        onRemoveCard={handleRemoveCard}
-        onClearAll={handleClearAll}
-        onExport={handleExport}
-        isExpanded={queueExpanded}
-        onToggleExpand={() => setQueueExpanded(prev => !prev)}
-        onManualAdd={handleManualAdd}
-      />
-
-      {/* Batch Settings Modal */}
-      <BatchSettings
-        isOpen={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        batchDefaults={batchDefaults}
-        onUpdateDefaults={setBatchDefaults}
-        cards={cards}
-        onAddCard={handleAddCardFromSearch}
-        activeTab={settingsTab}
-      />
-
-      {/* Toast notification */}
-      {notification && (
-        <div className={`fixed bottom-24 left-1/2 -translate-x-1/2 z-40 px-4 py-2 rounded-full text-sm font-medium shadow-lg fade-in ${
-          notification.type === 'success'
-            ? 'bg-green-500/90 text-white backdrop-blur-sm'
-            : notification.type === 'error'
-              ? 'bg-red-500/90 text-white backdrop-blur-sm'
-              : 'bg-rift-700/90 text-rift-100 backdrop-blur-sm border border-rift-500/30'
-        }`}>
-          {notification.message}
-        </div>
-      )}
-    </div>
+      {/* Toast */}
+      <ToastNotification notification={notification} />
+    </AppShell>
   );
 }
