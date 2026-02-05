@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { ChevronDown, Plus, CheckSquare, Square } from 'lucide-react';
 import { DOMAIN_COLORS, RARITY_STYLES } from '../../data/sampleCards.js';
+import { getMatcher } from '../../lib/cardMatcher.js';
 
 /**
  * Build a card data object from the matcher's match data.
@@ -67,6 +68,15 @@ export default function CardDetailPanel({
 
   // Resolve card data from matcher match + optional DB lookup (only if names match)
   const cardData = resolveCardData(activeMatch, cards);
+
+  // Look up original card image URL from matcher data
+  const originalImageUrl = useMemo(() => {
+    if (!activeCardId) return null;
+    const matcher = getMatcher();
+    if (!matcher.ready) return null;
+    const matcherCard = matcher.cards.find(c => c.id === activeCardId);
+    return matcherCard?.imageUrl || null;
+  }, [activeCardId]);
   const domainStyle = cardData?.domain ? (DOMAIN_COLORS[cardData.domain] || DOMAIN_COLORS.Fury) : null;
   const rarityStyle = cardData?.rarity ? (RARITY_STYLES[cardData.rarity] || RARITY_STYLES.Common) : null;
 
@@ -138,14 +148,25 @@ export default function CardDetailPanel({
       {/* Expanded content */}
       {isExpanded && (
         <div className="px-4 pb-4 space-y-4 fade-in">
-          {/* Large crop preview */}
-          {cropSrc && (
-            <div className="flex justify-center">
-              <div className="rounded-xl overflow-hidden border border-rift-600/30 shadow-lg max-w-[160px]">
-                <img src={cropSrc} alt="" className="w-full h-auto" />
+          {/* Side-by-side: detected crop vs original card */}
+          <div className="flex items-start justify-center gap-3">
+            {cropSrc && (
+              <div className="flex flex-col items-center gap-1">
+                <p className="text-[9px] text-rift-500 uppercase tracking-wider">Detected</p>
+                <div className="rounded-xl overflow-hidden border border-rift-600/30 shadow-lg max-w-[130px]">
+                  <img src={cropSrc} alt="" className="w-full h-auto" />
+                </div>
               </div>
-            </div>
-          )}
+            )}
+            {originalImageUrl && (
+              <div className="flex flex-col items-center gap-1">
+                <p className="text-[9px] text-rift-500 uppercase tracking-wider">Original</p>
+                <div className="rounded-xl overflow-hidden border border-gold-400/30 shadow-lg max-w-[130px]">
+                  <img src={originalImageUrl} alt="" className="w-full h-auto" />
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* Card details */}
           {cardData && (

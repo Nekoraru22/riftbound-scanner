@@ -8,9 +8,9 @@ import IdentifyTab from './components/identify/IdentifyTab.jsx';
 import SettingsTab from './components/settings/SettingsTab.jsx';
 import { useCamera } from './hooks/useCamera.js';
 import { useCardDetection } from './hooks/useCardDetection.js';
-import { initializeDatabase } from './lib/cardDatabase.js';
 import { downloadCSV, validateForExport } from './lib/csvExporter.js';
 import { getMatcher } from './lib/cardMatcher.js';
+import { isFoilOnly } from './data/sampleCards.js';
 
 export default function App() {
   // ─── App State ─────────────────────────────────────────────
@@ -18,14 +18,13 @@ export default function App() {
   const [loadProgress, setLoadProgress] = useState(0);
   const [loadStage, setLoadStage] = useState('db');
 
-  // Card database
+  // Card database (built from CardMatcher data)
   const [cards, setCards] = useState([]);
-  const [referenceHashes, setReferenceHashes] = useState([]);
-
 
   // Scanning
   const [scanEnabled, setScanEnabled] = useState(true);
-  const [scannedCards, setScannedCards] = useState([]);
+  const [pendingCards, setPendingCards] = useState([]);   // detected, not yet confirmed
+  const [scannedCards, setScannedCards] = useState([]);   // confirmed export list
 
   // UI
   const [activeTab, setActiveTab] = useState('scanner');
@@ -42,7 +41,6 @@ export default function App() {
   const camera = useCamera();
 
   const detection = useCardDetection({
-    referenceHashes,
     cards,
     enabled: scanEnabled && camera.isActive && activeTab === 'scanner',
   });
@@ -51,34 +49,34 @@ export default function App() {
   useEffect(() => {
     async function init() {
       try {
-        // Stage 1: Load card database
-        setLoadStage('db');
-        const { cards: loadedCards, hashes } = await initializeDatabase({
-          onProgress: (p) => setLoadProgress(p * 0.5),
-        });
-        setCards(loadedCards);
-        setReferenceHashes(hashes);
-
-
-        // Stage 2: Initialize YOLO detector (warmup)
+        // Stage 1: Initialize YOLO detector (warmup)
         setLoadStage('model');
-        setLoadProgress(0.5);
+        setLoadProgress(0.2);
         await detection.initDetector();
-        setLoadProgress(0.75);
+        setLoadProgress(0.5);
 
-        // Stage 3: Initialize card matcher
+        // Stage 2: Initialize card matcher (loads card-hashes.json)
         setLoadStage('matcher');
-        try {
-          await getMatcher().initialize();
-        } catch (e) {
-          console.warn('[App] CardMatcher init failed (identify tab will be limited):', e);
-        }
-        setLoadProgress(0.95);
+        const matcher = getMatcher();
+        await matcher.initialize();
+        setLoadProgress(0.85);
+
+        // Build cards array from matcher data
+        const matcherCards = matcher.cards.map(c => ({
+          id: c.id,
+          name: c.name,
+          collectorNumber: String(c.number).padStart(3, '0'),
+          set: c.set,
+          setName: c.setName,
+          rarity: c.rarity,
+          type: c.type,
+        }));
+        setCards(matcherCards);
 
         // Done
         setLoadStage('ready');
         setLoadProgress(1);
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 400));
         setIsLoading(false);
       } catch (error) {
         console.error('[App] Initialization error:', error);
@@ -93,11 +91,11 @@ export default function App() {
   useEffect(() => { batchDefaultsRef.current = batchDefaults; }, [batchDefaults]);
 
   // ─── Card Detection Handler ────────────────────────────────
-  // Uses functional setState to avoid stale closure on scannedCards
+  // Scanned cards go to pendingCards first (not directly to export list)
   const handleCardDetected = useCallback((result) => {
-    const { cardData, confidence, distance, timestamp } = result;
+    const { cardData, confidence, similarity, timestamp } = result;
 
-    setScannedCards(prev => {
+    setPendingCards(prev => {
       const existingIndex = prev.findIndex(c => c.cardData.id === cardData.id);
       if (existingIndex >= 0) {
         const updated = [...prev];
@@ -115,9 +113,9 @@ export default function App() {
           quantity: 1,
           condition: defaults.condition,
           language: defaults.language,
-          foil: defaults.foil,
+          foil: isFoilOnly(cardData.rarity) || defaults.foil,
           confidence,
-          matchDistance: distance,
+          similarity,
           scanTimestamp: timestamp,
         }];
       }
@@ -126,6 +124,64 @@ export default function App() {
     if (navigator.vibrate) {
       navigator.vibrate(50);
     }
+  }, []);
+
+  // ─── Pending → Export list handlers ──────────────────────────
+  const handleConfirmPending = useCallback((index) => {
+    setPendingCards(prev => {
+      const card = prev[index];
+      if (!card) return prev;
+
+      setScannedCards(exportPrev => {
+        const existingIndex = exportPrev.findIndex(c => c.cardData.id === card.cardData.id);
+        if (existingIndex >= 0) {
+          const updated = [...exportPrev];
+          updated[existingIndex] = {
+            ...updated[existingIndex],
+            quantity: updated[existingIndex].quantity + card.quantity,
+          };
+          return updated;
+        }
+        return [...exportPrev, { ...card }];
+      });
+
+      showNotification(`${card.cardData.name} added to export`, 'success');
+      return prev.filter((_, i) => i !== index);
+    });
+  }, []);
+
+  const handleConfirmAllPending = useCallback(() => {
+    setPendingCards(prev => {
+      if (prev.length === 0) return prev;
+
+      setScannedCards(exportPrev => {
+        let updated = [...exportPrev];
+        for (const card of prev) {
+          const existingIndex = updated.findIndex(c => c.cardData.id === card.cardData.id);
+          if (existingIndex >= 0) {
+            updated[existingIndex] = {
+              ...updated[existingIndex],
+              quantity: updated[existingIndex].quantity + card.quantity,
+            };
+          } else {
+            updated = [...updated, { ...card }];
+          }
+        }
+        return updated;
+      });
+
+      showNotification(`${prev.length} card${prev.length !== 1 ? 's' : ''} added to export`, 'success');
+      return [];
+    });
+  }, []);
+
+  const handleRemovePending = useCallback((index) => {
+    setPendingCards(prev => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const handleClearPending = useCallback(() => {
+    setPendingCards([]);
+    detection.resetCooldown();
   }, []);
 
   // ─── Start scanning when camera is active ──────────────────
@@ -158,7 +214,7 @@ export default function App() {
 
   const handleClearAll = useCallback(() => {
     setScannedCards(prev => {
-      if (prev.length > 0 && confirm('Delete all scanned cards?')) {
+      if (prev.length > 0 && confirm('Delete all cards from export list?')) {
         detection.resetCooldown();
         return [];
       }
@@ -166,8 +222,8 @@ export default function App() {
     });
   }, []);
 
-  // Uses functional setState to avoid stale closure — fixes "add all adds only 1"
-  const handleAddCardFromSearch = useCallback((cardData) => {
+  // Add a single card to export list (from individual add button)
+  const handleAddCardToExport = useCallback((cardData) => {
     setScannedCards(prev => {
       const existingIndex = prev.findIndex(c => c.cardData.id === cardData.id);
       if (existingIndex >= 0) {
@@ -176,23 +232,50 @@ export default function App() {
           ...updated[existingIndex],
           quantity: updated[existingIndex].quantity + 1,
         };
-        showNotification(`${cardData.name} — qty +1`, 'success');
         return updated;
       } else {
         const defaults = batchDefaultsRef.current;
-        showNotification(`+ ${cardData.name}`, 'success');
         return [...prev, {
           cardData,
           quantity: 1,
           condition: defaults.condition,
           language: defaults.language,
-          foil: defaults.foil,
+          foil: isFoilOnly(cardData.rarity) || defaults.foil,
           confidence: 1,
-          matchDistance: 0,
           scanTimestamp: Date.now(),
         }];
       }
     });
+    showNotification(`+ ${cardData.name}`, 'success');
+  }, []);
+
+  // Add multiple cards to export list at once (from IdentifyTab bulk add)
+  const handleAddCardsToExport = useCallback((cardDataArray) => {
+    setScannedCards(prev => {
+      let updated = [...prev];
+      for (const cardData of cardDataArray) {
+        const existingIndex = updated.findIndex(c => c.cardData.id === cardData.id);
+        if (existingIndex >= 0) {
+          updated[existingIndex] = {
+            ...updated[existingIndex],
+            quantity: updated[existingIndex].quantity + 1,
+          };
+        } else {
+          const defaults = batchDefaultsRef.current;
+          updated = [...updated, {
+            cardData,
+            quantity: 1,
+            condition: defaults.condition,
+            language: defaults.language,
+            foil: isFoilOnly(cardData.rarity) || defaults.foil,
+            confidence: 1,
+            scanTimestamp: Date.now(),
+          }];
+        }
+      }
+      return updated;
+    });
+    showNotification(`${cardDataArray.length} card${cardDataArray.length !== 1 ? 's' : ''} added to export`, 'success');
   }, []);
 
   // ─── CSV Export ────────────────────────────────────────────
@@ -241,14 +324,17 @@ export default function App() {
             camera={camera}
             detection={detection}
             scanEnabled={scanEnabled}
+            pendingCards={pendingCards}
             scannedCards={scannedCards}
             onToggleScanning={toggleScanning}
+            onConfirmPending={handleConfirmPending}
+            onConfirmAllPending={handleConfirmAllPending}
+            onRemovePending={handleRemovePending}
+            onClearPending={handleClearPending}
             onUpdateCard={handleUpdateCard}
             onRemoveCard={handleRemoveCard}
             onClearAll={handleClearAll}
             onExport={handleExport}
-            onAddCardFromSearch={handleAddCardFromSearch}
-            cards={cards}
             batchDefaults={batchDefaults}
             showNotification={showNotification}
           />
@@ -258,7 +344,8 @@ export default function App() {
           <IdentifyTab
             cards={cards}
             scannedCards={scannedCards}
-            onAddToScanner={handleAddCardFromSearch}
+            onAddToScanner={handleAddCardToExport}
+            onAddBatchToScanner={handleAddCardsToExport}
             onUpdateCard={handleUpdateCard}
             onRemoveCard={handleRemoveCard}
             onClearAll={handleClearAll}

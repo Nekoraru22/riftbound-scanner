@@ -276,6 +276,13 @@ modal run train.py --export-only     # Download results later
 **Poor detection on dark/black backgrounds:**
 The model struggled to detect cards on dark surfaces because the card borders are black and blended into the background. The synthetic dataset generator (`data_creator.py`) was only creating backgrounds with colors in the 20-240 range, rarely producing truly dark scenes. Fixed by biasing 40% of generated backgrounds toward the 0-50 color range, and adding stronger brightness augmentation during training (`hsv_v=0.6`, `mixup=0.2`, `degrees=15`).
 
+## Model & Dataset
+
+| Resource | URL |
+|----------|-----|
+| YOLO11n-OBB Model | <https://platform.ultralytics.com/nekoraru22/yolo11n-obb-riftbound> |
+| Training Dataset | <https://platform.ultralytics.com/nekoraru22/datasets/dataset-obb-riftbound> |
+
 ## Dependencies
 
 ### Python (model/)

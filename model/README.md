@@ -1,9 +1,8 @@
 # TODO
-- Al añadir varias sale una alerta verde solo con el nombre de una de las cartas
-- Ahora las cartas se rellenan con colores pero no entiendo porque se le puede dar click. haz que los colores también sirvan para identificar la carta en la lista
-- Quita la búsqueda en la lista de exportar a csv
-- El scanner aun falla con las cartas que escanea, revisa como funciona el modelo y arreglalo. Aparte que no se añadan a la lista de exportar directamente, sino a la otra lista que va antes
-- Algunas cartas no tienen versión standard, solo foil. Hay que comprobar eso
-- Añadir esto al readme:
-    model: https://platform.ultralytics.com/nekoraru22/yolo11n-obb-riftbound
-    dataset: https://platform.ultralytics.com/nekoraru22/datasets/dataset-obb-riftbound
+- Las cartas encuadradas sobre la imagen que sube el usuario son de colores y se les puede dar click, pero el color ahora mismo no sirve de nada, estaría bien que de alguna manera al darle click te abriese su elemento en la lista o algo así, usar los colores para identificar cual es cual también
+- Mejorar diseño
+- Hash junto a DB???
+
+The foil variant info isn't in the source data, but the rules are deterministic based on rarity:
+    Rare/Epic → always foil (foil-only)
+    Common/Uncommon → both standard and foil available

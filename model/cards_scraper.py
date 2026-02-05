@@ -464,7 +464,7 @@ def generate_card_hashes() -> None:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT id, name, collector_number, set_id, set_name, rarity, card_type, orientation, image_path FROM cards"
+        "SELECT id, name, collector_number, set_id, set_name, rarity, card_type, orientation, image_url, image_path FROM cards"
     ).fetchall()
     conn.close()
 
@@ -493,6 +493,7 @@ def generate_card_hashes() -> None:
             "rarity": row["rarity"],
             "type": row["card_type"],
             "orientation": row["orientation"],
+            "imageUrl": row["image_url"],
             "f": features,
         })
 

@@ -7,20 +7,24 @@ export default function ScannerTab({
   camera,
   detection,
   scanEnabled,
+  pendingCards,
   scannedCards,
   onToggleScanning,
+  onConfirmPending,
+  onConfirmAllPending,
+  onRemovePending,
+  onClearPending,
   onUpdateCard,
   onRemoveCard,
   onClearAll,
   onExport,
-  onAddCardFromSearch,
-  cards,
   batchDefaults,
   showNotification,
 }) {
   const [sheetExpanded, setSheetExpanded] = useState(false);
 
-  const totalCards = scannedCards.reduce((sum, c) => sum + c.quantity, 0);
+  const totalExport = scannedCards.reduce((sum, c) => sum + c.quantity, 0);
+  const totalPending = pendingCards.reduce((sum, c) => sum + c.quantity, 0);
 
   return (
     <div className="flex-1 relative overflow-hidden">
@@ -42,21 +46,24 @@ export default function ScannerTab({
       {/* Floating card counter */}
       {!sheetExpanded && (
         <CardCounter
-          count={totalCards}
-          uniqueCount={scannedCards.length}
+          count={totalPending + totalExport}
+          uniqueCount={pendingCards.length + scannedCards.length}
           onTap={() => setSheetExpanded(true)}
         />
       )}
 
-      {/* Bottom sheet with card list */}
+      {/* Bottom sheet with pending + export lists */}
       <ScannerBottomSheet
+        pendingCards={pendingCards}
         scannedCards={scannedCards}
+        onConfirmPending={onConfirmPending}
+        onConfirmAllPending={onConfirmAllPending}
+        onRemovePending={onRemovePending}
+        onClearPending={onClearPending}
         onUpdateCard={onUpdateCard}
         onRemoveCard={onRemoveCard}
         onClearAll={onClearAll}
         onExport={onExport}
-        cards={cards}
-        onAddCardFromSearch={onAddCardFromSearch}
         isExpanded={sheetExpanded}
         onToggleExpand={() => setSheetExpanded(prev => !prev)}
       />

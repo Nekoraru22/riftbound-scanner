@@ -155,6 +155,7 @@ export default function IdentifyTab({
   cards,
   scannedCards,
   onAddToScanner,
+  onAddBatchToScanner,
   onUpdateCard,
   onRemoveCard,
   onClearAll,
@@ -296,23 +297,20 @@ export default function IdentifyTab({
     }
   }, [detections, checkedIndices]);
 
-  // Add all checked detections to the scanner
+  // Add all checked detections to the scanner (batch)
   const addCheckedToScanner = useCallback(() => {
-    let added = 0;
+    const cardDataArray = [];
     for (const idx of checkedIndices) {
       const det = detections[idx];
       if (!det?.matchResult?.card) continue;
       const cardData = resolveMatchCardData(det, cards);
-      if (cardData) {
-        onAddToScanner(cardData);
-        added++;
-      }
+      if (cardData) cardDataArray.push(cardData);
     }
-    if (added > 0) {
-      showNotification(`${added} card${added !== 1 ? 's' : ''} added`, 'success');
+    if (cardDataArray.length > 0) {
+      onAddBatchToScanner(cardDataArray);
     }
     setCheckedIndices(new Set());
-  }, [checkedIndices, detections, cards, onAddToScanner, showNotification]);
+  }, [checkedIndices, detections, cards, onAddBatchToScanner]);
 
   // Export checked detections as CSV
   const exportCheckedCSV = useCallback(() => {
@@ -505,13 +503,16 @@ export default function IdentifyTab({
 
       {/* Bottom sheet with card list */}
       <ScannerBottomSheet
+        pendingCards={[]}
         scannedCards={scannedCards}
+        onConfirmPending={() => {}}
+        onConfirmAllPending={() => {}}
+        onRemovePending={() => {}}
+        onClearPending={() => {}}
         onUpdateCard={onUpdateCard}
         onRemoveCard={onRemoveCard}
         onClearAll={onClearAll}
         onExport={onExport}
-        cards={cards}
-        onAddCardFromSearch={onAddToScanner}
         isExpanded={sheetExpanded}
         onToggleExpand={() => setSheetExpanded(prev => !prev)}
       />

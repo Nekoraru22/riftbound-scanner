@@ -1,11 +1,12 @@
 import React, { memo } from 'react';
 import { Trash2, Plus, Minus, Sparkles } from 'lucide-react';
-import { CONDITIONS, LANGUAGES, DOMAIN_COLORS, RARITY_STYLES } from '../../data/sampleCards.js';
+import { CONDITIONS, LANGUAGES, DOMAIN_COLORS, RARITY_STYLES, isFoilOnly } from '../../data/sampleCards.js';
 
 const ScannerCardRow = memo(function ScannerCardRow({ card, index, onUpdate, onRemove }) {
   const { cardData, quantity, condition, language, foil } = card;
   const domainStyle = DOMAIN_COLORS[cardData.domain] || DOMAIN_COLORS.Fury;
   const rarityStyle = RARITY_STYLES[cardData.rarity] || RARITY_STYLES.Common;
+  const foilOnly = isFoilOnly(cardData.rarity);
 
   const handleFieldChange = (field, value) => {
     onUpdate(index, { ...card, [field]: value });
@@ -84,16 +85,19 @@ const ScannerCardRow = memo(function ScannerCardRow({ card, index, onUpdate, onR
           ))}
         </select>
 
-        {/* Foil toggle */}
+        {/* Foil toggle — forced on + disabled for Rare/Epic (always foil) */}
         <button
-          onClick={() => handleFieldChange('foil', !foil)}
-          className={`h-6 w-6 rounded-lg border flex items-center justify-center transition-all flex-shrink-0 ${
-            foil
+          onClick={() => !foilOnly && handleFieldChange('foil', !foil)}
+          disabled={foilOnly}
+          title={foilOnly ? 'Always foil (Rare/Epic)' : foil ? 'Foil' : 'Standard'}
+          className={`h-6 rounded-lg border flex items-center justify-center gap-0.5 transition-all flex-shrink-0 px-1.5 ${
+            foil || foilOnly
               ? 'bg-purple-500/20 border-purple-400/50 text-purple-400'
               : 'bg-rift-800 border-rift-600/40 text-rift-500'
-          }`}
+          } ${foilOnly ? 'opacity-70 cursor-not-allowed' : ''}`}
         >
           <Sparkles className="w-3 h-3" />
+          {foilOnly && <span className="text-[8px] font-mono">F</span>}
         </button>
       </div>
     </div>
