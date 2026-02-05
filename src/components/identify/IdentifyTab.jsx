@@ -115,7 +115,6 @@ function identifyCard(cropCanvas, matcher) {
       domain: r.card.domain,
       rarity: r.card.rarity,
       type: r.card.type,
-      imageUrl: r.card.imageUrl,
       sim: (r.similarity * 100).toFixed(1),
       similarity: r.similarity,
     })),
@@ -144,7 +143,6 @@ function resolveMatchCardData(det) {
     domain: matchEntry.domain,
     rarity: matchEntry.rarity,
     type: matchEntry.type,
-    imageUrl: matchEntry.imageUrl,
   };
 }
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ChevronDown, Plus, CheckSquare, Square } from 'lucide-react';
 import { DOMAIN_COLORS, RARITY_STYLES } from '../../data/sampleCards.js';
+import { getCardImageUrl } from '../../lib/cardMatcher.js';
 
 /**
  * Build a card data object directly from the match entry.
@@ -18,7 +19,6 @@ function resolveCardData(activeMatch) {
     domain: activeMatch.domain,
     rarity: activeMatch.rarity,
     type: activeMatch.type,
-    imageUrl: activeMatch.imageUrl,
   };
 }
 
@@ -70,8 +70,8 @@ export default function CardDetailPanel({
   // Resolve card data directly from match entry (contains all metadata)
   const cardData = resolveCardData(activeMatch);
 
-  // Original card image URL is now directly in the match
-  const originalImageUrl = activeMatch?.imageUrl || null;
+  // Get local card image URL from card ID
+  const originalImageUrl = activeMatch?.id ? getCardImageUrl(activeMatch.id) : null;
 
   const domainStyle = cardData?.domain ? (DOMAIN_COLORS[cardData.domain] || DOMAIN_COLORS.Fury) : null;
   const rarityStyle = cardData?.rarity ? (RARITY_STYLES[cardData.rarity] || RARITY_STYLES.Common) : null;

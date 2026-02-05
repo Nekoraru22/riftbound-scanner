@@ -155,7 +155,6 @@ export function useCardDetection({ enabled = false }) {
       domain: matcherCard.domain,
       rarity: matcherCard.rarity,
       type: matcherCard.type,
-      imageUrl: matcherCard.imageUrl,
     };
   }
 

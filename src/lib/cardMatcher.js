@@ -7,6 +7,15 @@
 
 const HASHES_URL = '/card-hashes.json';
 
+/**
+ * Get the local image URL for a card by its ID.
+ * @param {string} cardId - The card ID (e.g., "ogn-001-298")
+ * @returns {string} - Local image path (e.g., "/cards/ogn-001-298.webp")
+ */
+export function getCardImageUrl(cardId) {
+  return `/cards/${cardId}.webp`;
+}
+
 class CardMatcher {
   constructor() {
     this.cards = [];
