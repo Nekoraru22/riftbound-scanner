@@ -19,7 +19,7 @@ rng = np.random.default_rng(seed=42)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "riftbound.db")
-CARDS_DIR = os.path.join(BASE_DIR, "cards")
+CARDS_DIR = os.path.join(BASE_DIR, "..", "public", "cards")
 DATASET_DIR = os.path.join(BASE_DIR, "dataset")
 TEXTURES_DIR = os.path.join(BASE_DIR, "textures")
 DISTRACTORS_DIR = os.path.join(BASE_DIR, "distractors")

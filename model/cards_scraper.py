@@ -2,7 +2,10 @@ import os
 import re
 import sys
 import json
+import shutil
 import sqlite3
+from io import BytesIO
+
 import requests
 
 import cv2
@@ -14,8 +17,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "riftbound.db")
-CARDS_DIR = os.path.join(BASE_DIR, "cards")
-HASHES_PATH = os.path.join(BASE_DIR, "..", "public", "card-hashes.json")
+PUBLIC_DIR = os.path.join(BASE_DIR, "..", "public")
+CARDS_DIR = os.path.join(PUBLIC_DIR, "cards")
+HASHES_PATH = os.path.join(PUBLIC_DIR, "card-hashes.json")
 GALLERY_URL = "https://riftbound.leagueoflegends.com/en-us/card-gallery/"
 
 GRID_SIZE = 8 # 8x8 grid = 192 features (64 cells * 3 RGB channels)
@@ -275,7 +279,7 @@ def normalize_card(raw: dict) -> dict:
         "text": text,
         "orientation": raw.get("orientation", "portrait"),
         "image_url": image_url,
-        "image_path": f"cards/{card_id}.png",
+        "image_path": f"../public/cards/{card_id}.webp",
     }
 
 
@@ -336,13 +340,12 @@ def insert_cards(conn: sqlite3.Connection, cards: list[dict]) -> None:
     conn.commit()
 
 
-def _download_single_image(card: dict, existing_files: set) -> tuple[str, bool]:
+def _download_single_image(card: dict) -> tuple[str, bool]:
     """
-    Downloads a single card image.
+    Downloads a single card image and optimizes it to WebP format.
 
     Arguments:
         card: The card dictionary containing image URL.
-        existing_files: Set of already downloaded file names.
 
     Returns:
         A tuple of (card_id, success).
@@ -350,15 +353,20 @@ def _download_single_image(card: dict, existing_files: set) -> tuple[str, bool]:
     card_id = card["id"]
     url = card["image_url"]
 
-    if not url or f"{card_id}.png" in existing_files:
-        return (card_id, True)
+    if not url:
+        return (card_id, False)
 
-    filepath = os.path.join(CARDS_DIR, f"{card_id}.png")
+    filepath = os.path.join(CARDS_DIR, f"{card_id}.webp")
     try:
         resp = SESSION.get(url, timeout=20)
         resp.raise_for_status()
-        with open(filepath, "wb") as f:
-            f.write(resp.content)
+
+        # Load image and optimize to WebP
+        with Image.open(BytesIO(resp.content)) as img:
+            # Rotate landscape images to portrait
+            if img.width > img.height:
+                img = img.rotate(90, expand=True)
+            img.save(filepath, format="WEBP", quality=80)
         return (card_id, True)
     except Exception:
         return (card_id, False)
@@ -366,26 +374,27 @@ def _download_single_image(card: dict, existing_files: set) -> tuple[str, bool]:
 
 def download_images(cards: list[dict]) -> None:
     """
-    Downloads the card images to the local cards directory using parallel requests.
+    Downloads card images, optimizes them to WebP, and saves to public/cards.
 
     Arguments:
         cards: A list of card dictionaries containing image URLs.
     """
-    os.makedirs(CARDS_DIR, exist_ok=True)
+    # Clear and recreate the cards directory
+    if os.path.exists(CARDS_DIR):
+        shutil.rmtree(CARDS_DIR)
+    os.makedirs(CARDS_DIR)
 
-    existing_files = set(os.listdir(CARDS_DIR))
-    cards_to_download = [c for c in cards if c["image_url"] and f"{c['id']}.png" not in existing_files]
-    skipped = len(cards) - len(cards_to_download)
+    cards_to_download = [c for c in cards if c["image_url"]]
     failed = 0
 
     if not cards_to_download:
-        print(f"Download complete. Skipped: {skipped}, Failed: 0")
+        print("No cards to download.")
         return
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {executor.submit(_download_single_image, card, existing_files): card for card in cards_to_download}
+        futures = {executor.submit(_download_single_image, card): card for card in cards_to_download}
         try:
-            for future in tqdm(as_completed(futures), total=len(futures), desc="Downloading images"):
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Downloading and optimizing"):
                 card_id, success = future.result()
                 if not success:
                     failed += 1
@@ -396,44 +405,7 @@ def download_images(cards: list[dict]) -> None:
             executor.shutdown(wait=False, cancel_futures=True)
             raise
 
-    print(f"Download complete. Skipped: {skipped}, Failed: {failed}")
-
-
-def rotate_landscape_images() -> int:
-    """
-    Rotates all landscape (horizontal) images to portrait (vertical) orientation.
-
-    Card images should be in portrait orientation for consistent processing.
-    This function finds all landscape images in the cards directory and
-    rotates them 90 degrees counter-clockwise.
-
-    Returns:
-        The number of images that were rotated.
-    """
-    if not os.path.exists(CARDS_DIR):
-        return 0
-
-    extensions = (".png", ".jpg", ".jpeg", ".webp")
-    rotated_count = 0
-
-    files = [f for f in os.listdir(CARDS_DIR) if f.lower().endswith(extensions)]
-
-    for filename in tqdm(files, desc="Checking orientations"):
-        filepath = os.path.join(CARDS_DIR, filename)
-        try:
-            with Image.open(filepath) as img:
-                width, height = img.size
-                if width > height:
-                    rotated = img.rotate(90, expand=True)
-                    rotated.save(filepath)
-                    rotated_count += 1
-        except Exception:
-            pass
-
-    if rotated_count > 0:
-        print(f"Rotated {rotated_count} landscape images to portrait")
-
-    return rotated_count
+    print(f"Download complete. Total: {len(cards_to_download)}, Failed: {failed}")
 
 
 def _compute_color_grid(image: np.ndarray, grid_size: int = GRID_SIZE) -> list[float]:
@@ -506,32 +478,6 @@ def generate_card_hashes() -> None:
     print(f"Hashes generated: {len(cards)} cards ({skipped} skipped)")
 
 
-def optimize_and_copy_cards() -> None:
-    """
-    Optimizes card images for web and copies them to the public directory.
-
-    This function reads all card images from the cards directory, optimizes
-    them (e.g., converts to WebP format), and saves them to the public/cards
-    directory for use by the frontend.
-    """
-    source_dir = CARDS_DIR
-    target_dir = os.path.join(BASE_DIR, "..", "public", "cards")
-    os.makedirs(target_dir, exist_ok=True)
-
-    extensions = (".png", ".jpg", ".jpeg", ".webp")
-    files = [f for f in os.listdir(source_dir) if f.lower().endswith(extensions)]
-
-    for filename in tqdm(files, desc="Optimizing and copying cards"):
-        source_path = os.path.join(source_dir, filename)
-        target_path = os.path.join(target_dir, filename)
-
-        try:
-            with Image.open(source_path) as img:
-                img.save(target_path, format="WEBP", quality=80)
-        except Exception:
-            pass
-
-
 def main():
     # Get arguments
     args = sys.argv[1:]
@@ -559,15 +505,11 @@ def main():
     if args and args[0] == "--skip-download":
         print("Skipping image download.")
     else:
-        # Download images and normalize orientations
+        # Download, optimize, and rotate images in one step
         download_images(cards)
-        rotate_landscape_images()
 
     # Generate color grid hashes for card matching
     generate_card_hashes()
-
-    # Optimize cards for web and copy into public directory
-    optimize_and_copy_cards()
 
     print("Scraping complete!")
 

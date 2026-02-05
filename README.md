@@ -11,9 +11,8 @@ A web application for scanning and cataloging RiftBound TCG cards using AI-power
 │  1. Fetch gallery HTML                                          │
 │  2. Extract card data from __NEXT_DATA__                        │
 │  3. Normalize and save to SQLite                                │
-│  4. Download card images (parallel)                             │
-│  5. Rotate landscape images to portrait                         │
-│  6. Generate color grid hashes ──────────────────────┐          │
+│  4. Download + optimize + rotate images (parallel WebP)         │
+│  5. Generate color grid hashes ──────────────────────┐          │
 └──────────────────────────────┬───────────────────────│──────────┘
                                │                       │
                                ▼                       ▼
@@ -135,12 +134,12 @@ python cards_scraper.py
 
 ```
 Downloading gallery...
-Cards found: 245
-Cards in database: 245
-Downloading images: 100%|██████████| 245/245
-Rotated 12 landscape images to portrait
-Generating hashes: 100%|██████████| 245/245
-Hashes generated: 245 cards (0 skipped)
+Cards found: 664
+Cards in database: 664
+Downloading and optimizing: 100%|██████████| 664/664
+Download complete. Total: 664, Failed: 0
+Generating hashes: 100%|██████████| 664/664
+Hashes generated: 664 cards (0 skipped)
 Scraping complete!
 ```
 
@@ -149,7 +148,7 @@ Scraping complete!
 | File | Description |
 |------|-------------|
 | `model/riftbound.db` | SQLite database with card metadata |
-| `model/cards/*.png` | Downloaded card images |
+| `public/cards/*.webp` | Optimized card images (WebP format) |
 | `public/card-hashes.json` | Color grid hashes for frontend matching |
 
 ## Synthetic Dataset Generation
@@ -283,26 +282,6 @@ The model struggled to detect cards on dark surfaces because the card borders ar
 | YOLO11n-OBB Model | <https://platform.ultralytics.com/nekoraru22/yolo11n-obb-riftbound> |
 | Training Dataset | <https://platform.ultralytics.com/nekoraru22/datasets/dataset-obb-riftbound> |
 
-## Dependencies
-
-### Python (model/)
-```
-requests
-tqdm
-Pillow
-opencv-python
-numpy
-modal        # Cloud training (train.py)
-ultralytics  # YOLO training (train.py)
-```
-
-### Frontend
-```
-React + Vite
-TensorFlow.js (YOLO model)
-IndexedDB (local storage)
-```
-
 ## Project Structure
 
 ```
@@ -312,11 +291,11 @@ riftbound-scanner-src/
 │   ├── data_creator.py     # Synthetic dataset generator
 │   ├── train.py            # Cloud training on Modal
 │   ├── riftbound.db        # SQLite database
-│   ├── cards/              # Downloaded card images
 │   ├── dataset/            # Generated YOLO OBB dataset
 │   ├── textures/           # (optional) Real background images
 │   └── distractors/        # (optional) Non-card PNG objects
 ├── public/
+│   ├── cards/              # Optimized card images (WebP)
 │   ├── card-hashes.json    # Color grid hashes
 │   ├── models/             # YOLO TF.js model files
 │   └── test.html           # Detection test page
