@@ -1,7 +1,7 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Loader2, RotateCcw, ScanLine, Download, Plus, CheckSquare, Square } from 'lucide-react';
 import ImageDropZone from './ImageDropZone.jsx';
-import DetectionCanvas from './DetectionCanvas.jsx';
+import DetectionCanvas, { DETECTION_COLORS } from './DetectionCanvas.jsx';
 import CardDetailPanel from './CardDetailPanel.jsx';
 import ScannerBottomSheet from '../scanner/ScannerBottomSheet.jsx';
 import CardCounter from '../scanner/CardCounter.jsx';
@@ -109,7 +109,13 @@ function identifyCard(cropCanvas, matcher) {
     top3: scores.slice(0, 3).map(r => ({
       id: r.card.id,
       name: r.card.name,
+      collectorNumber: String(r.card.number).padStart(3, '0'),
       set: r.card.set,
+      setName: r.card.setName,
+      domain: r.card.domain,
+      rarity: r.card.rarity,
+      type: r.card.type,
+      imageUrl: r.card.imageUrl,
       sim: (r.similarity * 100).toFixed(1),
       similarity: r.similarity,
     })),
@@ -118,41 +124,33 @@ function identifyCard(cropCanvas, matcher) {
 
 /**
  * Resolve card data from a detection's active match.
- * Uses the matcher's data as source of truth. Only uses the main DB (cards)
- * if the ID matches AND the name matches (to avoid SAMPLE_CARDS mismatches).
+ * Uses the matcher's top3 data directly since it contains all card metadata.
  */
-function resolveMatchCardData(det, cards) {
+function resolveMatchCardData(det) {
   const cardId = det.activeCardId || det.matchResult?.card?.id;
   if (!cardId) return null;
 
   // Find the match entry from top3 for the active card
   const matchEntry = det.matchResult?.top3?.find(m => m.id === cardId);
-  const matchName = matchEntry?.name || det.matchResult?.card?.name;
-  const matchSet = matchEntry?.set || det.matchResult?.card?.set;
+  if (!matchEntry) return null;
 
-  // Try main DB — only trust if name matches
-  const dbCard = cards.find(c => c.id === cardId);
-  if (dbCard && dbCard.name === matchName) {
-    return dbCard;
-  }
-
-  // Build from matcher data
-  const idParts = cardId.split('-');
-  const collectorNumber = idParts.length >= 2 ? idParts[1] : '000';
-
+  // Return directly from top3 — it now has all fields
   return {
-    id: cardId,
-    name: matchName,
-    collectorNumber,
-    set: matchSet,
-    setName: matchSet,
+    id: matchEntry.id,
+    name: matchEntry.name,
+    collectorNumber: matchEntry.collectorNumber,
+    set: matchEntry.set,
+    setName: matchEntry.setName,
+    domain: matchEntry.domain,
+    rarity: matchEntry.rarity,
+    type: matchEntry.type,
+    imageUrl: matchEntry.imageUrl,
   };
 }
 
 // --- Component ---
 
 export default function IdentifyTab({
-  cards,
   scannedCards,
   onAddToScanner,
   onAddBatchToScanner,
@@ -170,6 +168,19 @@ export default function IdentifyTab({
   const [selectedDetection, setSelectedDetection] = useState(null);
   const [checkedIndices, setCheckedIndices] = useState(new Set());
   const [sheetExpanded, setSheetExpanded] = useState(false);
+
+  // Refs for scrolling to selected detection
+  const detectionRefs = useRef([]);
+
+  // Scroll to selected detection when clicking on canvas
+  useEffect(() => {
+    if (selectedDetection !== null && detectionRefs.current[selectedDetection]) {
+      detectionRefs.current[selectedDetection].scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
+    }
+  }, [selectedDetection]);
 
   const handleImageSelected = useCallback((file) => {
     setFileName(file.name);
@@ -303,14 +314,14 @@ export default function IdentifyTab({
     for (const idx of checkedIndices) {
       const det = detections[idx];
       if (!det?.matchResult?.card) continue;
-      const cardData = resolveMatchCardData(det, cards);
+      const cardData = resolveMatchCardData(det);
       if (cardData) cardDataArray.push(cardData);
     }
     if (cardDataArray.length > 0) {
       onAddBatchToScanner(cardDataArray);
     }
     setCheckedIndices(new Set());
-  }, [checkedIndices, detections, cards, onAddBatchToScanner]);
+  }, [checkedIndices, detections, onAddBatchToScanner]);
 
   // Export checked detections as CSV
   const exportCheckedCSV = useCallback(() => {
@@ -318,7 +329,7 @@ export default function IdentifyTab({
     for (const idx of checkedIndices) {
       const det = detections[idx];
       if (!det?.matchResult?.card) continue;
-      const cardData = resolveMatchCardData(det, cards);
+      const cardData = resolveMatchCardData(det);
       if (cardData) {
         exportCards.push({
           cardData,
@@ -340,7 +351,7 @@ export default function IdentifyTab({
     }
     downloadCSV(exportCards);
     showNotification(`CSV exported — ${exportCards.length} cards`, 'success');
-  }, [checkedIndices, detections, cards, batchDefaults, showNotification]);
+  }, [checkedIndices, detections, batchDefaults, showNotification]);
 
   // Called by CardDetailPanel when user switches the active match
   const handleMatchChange = useCallback((detectionIndex, cardId) => {
@@ -391,7 +402,6 @@ export default function IdentifyTab({
                 detections={detections}
                 selectedIndex={selectedDetection}
                 onSelectDetection={setSelectedDetection}
-                cards={cards}
               />
 
               {/* Processing indicator */}
@@ -461,17 +471,24 @@ export default function IdentifyTab({
               {/* Detection cards */}
               <div className="space-y-2">
                 {detections.map((det, idx) => {
+                  const color = DETECTION_COLORS[idx % DETECTION_COLORS.length];
                   return (
-                    <CardDetailPanel
+                    <div
                       key={idx}
-                      detection={det}
-                      index={idx}
-                      onAddToScanner={handleAddToScanner}
-                      cards={cards}
-                      isChecked={checkedIndices.has(idx)}
-                      onToggleCheck={() => toggleCheck(idx)}
-                      onMatchChange={handleMatchChange}
-                    />
+                      ref={el => detectionRefs.current[idx] = el}
+                    >
+                      <CardDetailPanel
+                        detection={det}
+                        index={idx}
+                        onAddToScanner={handleAddToScanner}
+                        isChecked={checkedIndices.has(idx)}
+                        onToggleCheck={() => toggleCheck(idx)}
+                        onMatchChange={handleMatchChange}
+                        color={color}
+                        isSelected={selectedDetection === idx}
+                        onSelect={() => setSelectedDetection(selectedDetection === idx ? null : idx)}
+                      />
+                    </div>
                   );
                 })}
               </div>

@@ -18,9 +18,6 @@ export default function App() {
   const [loadProgress, setLoadProgress] = useState(0);
   const [loadStage, setLoadStage] = useState('db');
 
-  // Card database (built from CardMatcher data)
-  const [cards, setCards] = useState([]);
-
   // Scanning
   const [scanEnabled, setScanEnabled] = useState(true);
   const [pendingCards, setPendingCards] = useState([]);   // detected, not yet confirmed
@@ -41,7 +38,6 @@ export default function App() {
   const camera = useCamera();
 
   const detection = useCardDetection({
-    cards,
     enabled: scanEnabled && camera.isActive && activeTab === 'scanner',
   });
 
@@ -60,18 +56,6 @@ export default function App() {
         const matcher = getMatcher();
         await matcher.initialize();
         setLoadProgress(0.85);
-
-        // Build cards array from matcher data
-        const matcherCards = matcher.cards.map(c => ({
-          id: c.id,
-          name: c.name,
-          collectorNumber: String(c.number).padStart(3, '0'),
-          set: c.set,
-          setName: c.setName,
-          rarity: c.rarity,
-          type: c.type,
-        }));
-        setCards(matcherCards);
 
         // Done
         setLoadStage('ready');
@@ -342,7 +326,6 @@ export default function App() {
 
         {activeTab === 'identify' && (
           <IdentifyTab
-            cards={cards}
             scannedCards={scannedCards}
             onAddToScanner={handleAddCardToExport}
             onAddBatchToScanner={handleAddCardsToExport}

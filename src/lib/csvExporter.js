@@ -17,7 +17,7 @@ const CSV_HEADERS = [
   'Expansion',
   'Condition',
   'Language',
-  'Foil',
+  'Finish',
 ];
 
 /**
@@ -58,7 +58,7 @@ export function generateCSV(cards) {
       escapeCSV(card.cardData.set || 'OGN'),
       escapeCSV(card.condition || 'Near Mint'),
       escapeCSV(card.language || 'English'),
-      card.foil ? 'Yes' : '',
+      card.foil ? 'Foil' : 'Standard',
     ];
     lines.push(row.join(','));
   }

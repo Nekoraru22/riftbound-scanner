@@ -1,7 +1,7 @@
 import React, { useRef, useEffect } from 'react';
 
-// Color palette for distinguishing detections
-const DETECTION_COLORS = [
+// Color palette for distinguishing detections (exported for use in CardDetailPanel)
+export const DETECTION_COLORS = [
   { r: 78, g: 205, b: 196 },   // Teal
   { r: 255, g: 107, b: 107 },  // Red
   { r: 255, g: 209, b: 102 },  // Yellow
@@ -12,7 +12,7 @@ const DETECTION_COLORS = [
   { r: 255, g: 145, b: 186 },  // Pink
 ];
 
-export default function DetectionCanvas({ image, detections, selectedIndex, onSelectDetection, cards }) {
+export default function DetectionCanvas({ image, detections, selectedIndex, onSelectDetection }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
 
@@ -36,7 +36,7 @@ export default function DetectionCanvas({ image, detections, selectedIndex, onSe
         const hasMatch = det.matchResult && det.matchResult.similarity > 0.55;
         const color = DETECTION_COLORS[idx % DETECTION_COLORS.length];
 
-        // Resolve label from activeCardId or matchResult
+        // Resolve label from activeCardId or matchResult (top3 now has all data)
         let labelName = null;
         let labelSim = 0;
         if (hasMatch) {
@@ -45,10 +45,6 @@ export default function DetectionCanvas({ image, detections, selectedIndex, onSe
           if (activeTop3) {
             labelName = activeTop3.name;
             labelSim = activeTop3.similarity;
-          } else if (cards && activeId) {
-            const fullCard = cards.find(c => c.id === activeId);
-            labelName = fullCard?.name || det.matchResult.card.name;
-            labelSim = det.matchResult.similarity;
           } else {
             labelName = det.matchResult.card.name;
             labelSim = det.matchResult.similarity;
@@ -103,7 +99,7 @@ export default function DetectionCanvas({ image, detections, selectedIndex, onSe
         ctx.restore();
       });
     }
-  }, [image, detections, selectedIndex, cards]);
+  }, [image, detections, selectedIndex]);
 
   const handleCanvasClick = (e) => {
     if (!detections || detections.length === 0 || !canvasRef.current) return;

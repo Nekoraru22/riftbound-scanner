@@ -10,7 +10,7 @@ import { getMatcher } from '../lib/cardMatcher.js';
  *   2. Color grid matching on detected crops (via CardMatcher)
  *   3. Deduplication (prevents re-scanning the same card)
  */
-export function useCardDetection({ cards = [], enabled = false }) {
+export function useCardDetection({ enabled = false }) {
   const [detectorState, setDetectorState] = useState(DetectorState.UNLOADED);
   const [isScanning, setIsScanning] = useState(false);
   const [lastDetection, setLastDetection] = useState(null);
@@ -25,13 +25,11 @@ export function useCardDetection({ cards = [], enabled = false }) {
 
   // Refs to avoid stale closures in scan loop
   const enabledRef = useRef(enabled);
-  const cardsRef = useRef(cards);
   const captureFrameRef = useRef(null);
   const onCardDetectedRef = useRef(null);
 
   // Keep refs synced with latest values
   useEffect(() => { enabledRef.current = enabled; }, [enabled]);
-  useEffect(() => { cardsRef.current = cards; }, [cards]);
 
   // Cooldown between matching the same card (ms)
   const MATCH_COOLDOWN = 2000;
@@ -142,16 +140,11 @@ export function useCardDetection({ cards = [], enabled = false }) {
 
   /**
    * Resolve card data from a matcher card to full card format.
-   * Prefers the full cards DB, falls back to building from matcher data.
+   * Card data comes directly from the matcher (card-hashes.json).
    */
-  function resolveCardData(matcherCard, allCards) {
+  function resolveCardData(matcherCard) {
     if (!matcherCard) return null;
 
-    // Try to find in main cards DB
-    const dbCard = allCards.find(c => c.id === matcherCard.id);
-    if (dbCard) return dbCard;
-
-    // Build from matcher data
     const collectorNumber = String(matcherCard.number).padStart(3, '0');
     return {
       id: matcherCard.id,
@@ -159,8 +152,10 @@ export function useCardDetection({ cards = [], enabled = false }) {
       collectorNumber,
       set: matcherCard.set,
       setName: matcherCard.setName,
+      domain: matcherCard.domain,
       rarity: matcherCard.rarity,
       type: matcherCard.type,
+      imageUrl: matcherCard.imageUrl,
     };
   }
 
@@ -213,7 +208,7 @@ export function useCardDetection({ cards = [], enabled = false }) {
       }
 
       // Step 5: Resolve full card data
-      const cardData = resolveCardData(matchResult.card, cardsRef.current);
+      const cardData = resolveCardData(matchResult.card);
       if (!cardData) return null;
 
       // Update tracking

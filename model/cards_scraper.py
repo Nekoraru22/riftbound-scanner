@@ -506,7 +506,36 @@ def generate_card_hashes() -> None:
     print(f"Hashes generated: {len(cards)} cards ({skipped} skipped)")
 
 
+def optimize_and_copy_cards() -> None:
+    """
+    Optimizes card images for web and copies them to the public directory.
+
+    This function reads all card images from the cards directory, optimizes
+    them (e.g., converts to WebP format), and saves them to the public/cards
+    directory for use by the frontend.
+    """
+    source_dir = CARDS_DIR
+    target_dir = os.path.join(BASE_DIR, "..", "public", "cards")
+    os.makedirs(target_dir, exist_ok=True)
+
+    extensions = (".png", ".jpg", ".jpeg", ".webp")
+    files = [f for f in os.listdir(source_dir) if f.lower().endswith(extensions)]
+
+    for filename in tqdm(files, desc="Optimizing and copying cards"):
+        source_path = os.path.join(source_dir, filename)
+        target_path = os.path.join(target_dir, filename)
+
+        try:
+            with Image.open(source_path) as img:
+                img.save(target_path, format="WEBP", quality=80)
+        except Exception:
+            pass
+
+
 def main():
+    # Get arguments
+    args = sys.argv[1:]
+
     # Fetch and parse gallery
     html = fetch_gallery_html()
     next_data = extract_next_data(html)
@@ -527,14 +556,18 @@ def main():
     print(f"Cards in database: {total}")
     conn.close()
 
-    # Download images
-    download_images(cards)
-
-    # Rotate landscape images to portrait
-    rotate_landscape_images()
+    if args and args[0] == "--skip-download":
+        print("Skipping image download.")
+    else:
+        # Download images and normalize orientations
+        download_images(cards)
+        rotate_landscape_images()
 
     # Generate color grid hashes for card matching
     generate_card_hashes()
+
+    # Optimize cards for web and copy into public directory
+    optimize_and_copy_cards()
 
     print("Scraping complete!")
 

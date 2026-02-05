@@ -1,32 +1,24 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ChevronDown, Plus, CheckSquare, Square } from 'lucide-react';
 import { DOMAIN_COLORS, RARITY_STYLES } from '../../data/sampleCards.js';
-import { getMatcher } from '../../lib/cardMatcher.js';
 
 /**
- * Build a card data object from the matcher's match data.
- * If the main database (cards) has a matching entry with the SAME name, use it
- * for extra metadata (domain, rarity, type). Otherwise build from matcher data only.
+ * Build a card data object directly from the match entry.
+ * The match entry now contains all card metadata from the JSON.
  */
-function resolveCardData(activeMatch, cards) {
+function resolveCardData(activeMatch) {
   if (!activeMatch) return null;
-
-  // Try to find in main database — only trust it if the name matches
-  const dbCard = cards.find(c => c.id === activeMatch.id);
-  if (dbCard && dbCard.name === activeMatch.name) {
-    return dbCard;
-  }
-
-  // Build from matcher data; extract collector number from ID (format: set-NNN-total)
-  const idParts = activeMatch.id.split('-');
-  const collectorNumber = idParts.length >= 2 ? idParts[1] : '000';
 
   return {
     id: activeMatch.id,
     name: activeMatch.name,
-    collectorNumber,
+    collectorNumber: activeMatch.collectorNumber,
     set: activeMatch.set,
-    setName: activeMatch.set,
+    setName: activeMatch.setName,
+    domain: activeMatch.domain,
+    rarity: activeMatch.rarity,
+    type: activeMatch.type,
+    imageUrl: activeMatch.imageUrl,
   };
 }
 
@@ -34,12 +26,21 @@ export default function CardDetailPanel({
   detection,
   index,
   onAddToScanner,
-  cards,
   isChecked,
   onToggleCheck,
   onMatchChange,
+  color,
+  isSelected,
+  onSelect,
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
+
+  // Auto-expand when selected from canvas click
+  useEffect(() => {
+    if (isSelected && !isExpanded) {
+      setIsExpanded(true);
+    }
+  }, [isSelected]);
   const [cropSrc, setCropSrc] = useState(null);
   const [selectedMatchIdx, setSelectedMatchIdx] = useState(0);
 
@@ -66,17 +67,12 @@ export default function CardDetailPanel({
     }
   }, [activeCardId, index]);
 
-  // Resolve card data from matcher match + optional DB lookup (only if names match)
-  const cardData = resolveCardData(activeMatch, cards);
+  // Resolve card data directly from match entry (contains all metadata)
+  const cardData = resolveCardData(activeMatch);
 
-  // Look up original card image URL from matcher data
-  const originalImageUrl = useMemo(() => {
-    if (!activeCardId) return null;
-    const matcher = getMatcher();
-    if (!matcher.ready) return null;
-    const matcherCard = matcher.cards.find(c => c.id === activeCardId);
-    return matcherCard?.imageUrl || null;
-  }, [activeCardId]);
+  // Original card image URL is now directly in the match
+  const originalImageUrl = activeMatch?.imageUrl || null;
+
   const domainStyle = cardData?.domain ? (DOMAIN_COLORS[cardData.domain] || DOMAIN_COLORS.Fury) : null;
   const rarityStyle = cardData?.rarity ? (RARITY_STYLES[cardData.rarity] || RARITY_STYLES.Common) : null;
 
@@ -87,19 +83,38 @@ export default function CardDetailPanel({
     setSelectedMatchIdx(matchIdx);
   };
 
+  // Build color style from prop
+  const colorStyle = color
+    ? { backgroundColor: `rgb(${color.r}, ${color.g}, ${color.b})` }
+    : { backgroundColor: '#888' };
+  const borderColorStyle = color
+    ? `rgba(${color.r}, ${color.g}, ${color.b}, ${isSelected ? 0.7 : 0.3})`
+    : 'rgba(136, 136, 136, 0.3)';
+
   return (
-    <div className={`rounded-2xl border transition-all duration-200 overflow-hidden ${
-      isExpanded
-        ? 'bg-rift-800/80 border-rift-500/30'
-        : 'bg-rift-800/50 border-rift-600/20'
-    }`}>
+    <div
+      className={`rounded-2xl border-2 transition-all duration-200 overflow-hidden ${
+        isExpanded
+          ? 'bg-rift-800/80'
+          : 'bg-rift-800/50'
+      }`}
+      style={{ borderColor: borderColorStyle }}
+    >
       {/* Collapsed header - always visible */}
       <div className="flex items-center">
+        {/* Color indicator (clickable to match canvas) */}
+        <button
+          onClick={onSelect}
+          className="w-3 self-stretch flex-shrink-0 transition-opacity hover:opacity-80"
+          style={colorStyle}
+          title={`Detection #${index + 1} — click to highlight on image`}
+        />
+
         {/* Checkbox */}
         {hasMatch && (
           <button
             onClick={(e) => { e.stopPropagation(); onToggleCheck(); }}
-            className="pl-3 pr-1 py-3 flex-shrink-0"
+            className="pl-2 pr-1 py-3 flex-shrink-0"
           >
             {isChecked ? (
               <CheckSquare className="w-4 h-4 text-gold-400" />
@@ -113,12 +128,19 @@ export default function CardDetailPanel({
           onClick={() => setIsExpanded(!isExpanded)}
           className={`flex-1 flex items-center gap-3 p-3 text-left ${!hasMatch ? 'pl-4' : 'pl-1'}`}
         >
-          {/* Crop thumbnail */}
-          {cropSrc && (
-            <div className="w-10 h-14 rounded-lg overflow-hidden flex-shrink-0 bg-rift-700 border border-rift-600/30">
-              <img src={cropSrc} alt="" className="w-full h-full object-cover" />
-            </div>
-          )}
+          {/* Thumbnails: detected crop + original card */}
+          <div className="flex gap-1.5 flex-shrink-0">
+            {cropSrc && (
+              <div className="w-9 h-12 rounded-lg overflow-hidden bg-rift-700 border border-rift-600/30">
+                <img src={cropSrc} alt="Detected" className="w-full h-full object-cover" />
+              </div>
+            )}
+            {originalImageUrl && (
+              <div className="w-9 h-12 rounded-lg overflow-hidden bg-rift-700 border border-gold-400/40">
+                <img src={originalImageUrl} alt="Original" className="w-full h-full object-cover" />
+              </div>
+            )}
+          </div>
 
           {/* Info */}
           <div className="flex-1 min-w-0">
@@ -149,19 +171,19 @@ export default function CardDetailPanel({
       {isExpanded && (
         <div className="px-4 pb-4 space-y-4 fade-in">
           {/* Side-by-side: detected crop vs original card */}
-          <div className="flex items-start justify-center gap-3">
+          <div className="flex items-start justify-center gap-4">
             {cropSrc && (
-              <div className="flex flex-col items-center gap-1">
-                <p className="text-[9px] text-rift-500 uppercase tracking-wider">Detected</p>
-                <div className="rounded-xl overflow-hidden border border-rift-600/30 shadow-lg max-w-[130px]">
+              <div className="flex flex-col items-center gap-1.5">
+                <p className="text-[10px] text-rift-500 uppercase tracking-wider">Detected</p>
+                <div className="rounded-xl overflow-hidden border border-rift-600/30 shadow-lg w-[180px]">
                   <img src={cropSrc} alt="" className="w-full h-auto" />
                 </div>
               </div>
             )}
             {originalImageUrl && (
-              <div className="flex flex-col items-center gap-1">
-                <p className="text-[9px] text-rift-500 uppercase tracking-wider">Original</p>
-                <div className="rounded-xl overflow-hidden border border-gold-400/30 shadow-lg max-w-[130px]">
+              <div className="flex flex-col items-center gap-1.5">
+                <p className="text-[10px] text-rift-500 uppercase tracking-wider">Original</p>
+                <div className="rounded-xl overflow-hidden border border-gold-400/30 shadow-lg w-[180px]">
                   <img src={originalImageUrl} alt="" className="w-full h-auto" />
                 </div>
               </div>
