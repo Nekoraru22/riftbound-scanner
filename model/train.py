@@ -234,7 +234,7 @@ def train_model():
     """
     import os
     import shutil
-    from ultralytics import YOLO # pyright: ignore[reportPrivateImportUsage]
+    from ultralytics import YOLO # pyright: ignore[reportMissingImports, reportPrivateImportUsage]
 
     volume.reload()
 

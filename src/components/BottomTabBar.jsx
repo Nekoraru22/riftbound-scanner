@@ -1,15 +1,15 @@
 import React from 'react';
-import { Camera, ScanLine, Settings } from 'lucide-react';
+import { ScanLine, Layers, Settings } from 'lucide-react';
 
 const TABS = [
-  { id: 'scanner', label: 'Scanner', icon: Camera },
-  { id: 'identify', label: 'Identify', icon: ScanLine },
+  { id: 'scan', label: 'Scan', icon: ScanLine },
+  { id: 'collection', label: 'Collection', icon: Layers },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
 export default function BottomTabBar({ activeTab, onTabChange, scannedCount }) {
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-40 bg-rift-800/95 backdrop-blur-xl border-t border-rift-600/30"
+    <nav className="flex-shrink-0 z-40 bg-rift-800/95 backdrop-blur-xl border-t border-rift-600/30"
       style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
     >
       <div className="flex items-stretch h-16">
@@ -28,7 +28,7 @@ export default function BottomTabBar({ activeTab, onTabChange, scannedCount }) {
               )}
               <div className="relative">
                 <Icon className="w-5 h-5" strokeWidth={isActive ? 2.2 : 1.8} />
-                {id === 'scanner' && scannedCount > 0 && (
+                {id === 'collection' && scannedCount > 0 && (
                   <span className="absolute -top-1.5 -right-2.5 min-w-[16px] h-4 rounded-full bg-gold-500 text-rift-900 text-[9px] font-bold flex items-center justify-center px-1">
                     {scannedCount > 99 ? '99+' : scannedCount}
                   </span>

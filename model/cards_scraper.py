@@ -436,7 +436,7 @@ def generate_card_hashes() -> None:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT id, name, collector_number, set_id, set_name, rarity, card_type, orientation, image_url, image_path FROM cards"
+        "SELECT id, name, collector_number, public_code, set_id, set_name, domains, rarity, card_type, energy, might, tags, illustrator, text, orientation, image_url, image_path FROM cards"
     ).fetchall()
     conn.close()
 
@@ -456,14 +456,37 @@ def generate_card_hashes() -> None:
 
         features = _compute_color_grid(img)
 
+        # Parse domains JSON array → take first domain (primary)
+        domains_raw = row["domains"] or "[]"
+        try:
+            domain_list = json.loads(domains_raw)
+        except (json.JSONDecodeError, TypeError):
+            domain_list = []
+        domain = domain_list[0] if domain_list else None
+
+        # Parse tags JSON array
+        tags_raw = row["tags"] or "[]"
+        try:
+            tag_list = json.loads(tags_raw)
+        except (json.JSONDecodeError, TypeError):
+            tag_list = []
+
         cards.append({
             "id": row["id"],
             "name": row["name"],
             "number": row["collector_number"],
+            "code": row["public_code"],
             "set": row["set_id"],
             "setName": row["set_name"],
+            "domain": domain,
+            "domains": domain_list,
             "rarity": row["rarity"],
             "type": row["card_type"],
+            "energy": row["energy"],
+            "might": row["might"],
+            "tags": tag_list,
+            "illustrator": row["illustrator"],
+            "text": row["text"],
             "orientation": row["orientation"],
             "imageUrl": row["image_url"],
             "f": features,

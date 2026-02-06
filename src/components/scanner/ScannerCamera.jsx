@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Camera, CameraOff, RotateCw, Zap, ZapOff, AlertCircle } from 'lucide-react';
+import React, { useEffect, useState, useRef } from 'react';
+import { Camera, CameraOff, RotateCw, Zap, ZapOff, Play, Pause, AlertCircle } from 'lucide-react';
 
 export default function ScannerCamera({
   videoRef,
@@ -14,8 +14,29 @@ export default function ScannerCamera({
   onToggleScanning,
   scanEnabled,
   detectorState,
+  hasTorch,
+  torchOn,
+  onToggleTorch,
 }) {
   const [dimensions, setDimensions] = useState({ w: 0, h: 0 });
+  const [showToggleIcon, setShowToggleIcon] = useState(false);
+  const [toggleIconType, setToggleIconType] = useState('play'); // 'play' | 'pause'
+  const toggleTimeoutRef = useRef(null);
+
+  const handleTapCamera = () => {
+    // Show the icon briefly
+    setToggleIconType(scanEnabled ? 'play' : 'pause'); // shows what it's switching TO
+    setShowToggleIcon(true);
+    if (toggleTimeoutRef.current) clearTimeout(toggleTimeoutRef.current);
+    toggleTimeoutRef.current = setTimeout(() => setShowToggleIcon(false), 600);
+    onToggleScanning();
+  };
+
+  useEffect(() => {
+    return () => {
+      if (toggleTimeoutRef.current) clearTimeout(toggleTimeoutRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (!videoRef.current) return;
@@ -56,10 +77,23 @@ export default function ScannerCamera({
         autoPlay
       />
 
-      {/* Scanning overlay */}
+      {/* Tap to toggle scanning */}
       {isActive && (
-        <div className="absolute inset-0 pointer-events-none">
+        <div className="absolute inset-0" onClick={handleTapCamera}>
           <div className="absolute inset-0 bg-black/40" />
+
+          {/* Centered play/pause indicator (YouTube-style) */}
+          {showToggleIcon && (
+            <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
+              <div className="w-16 h-16 rounded-full bg-black/60 backdrop-blur-sm flex items-center justify-center animate-[fadeOut_0.6s_ease-out_forwards]">
+                {toggleIconType === 'pause' ? (
+                  <Pause className="w-8 h-8 text-white" />
+                ) : (
+                  <Play className="w-8 h-8 text-white ml-1" />
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Clear guide area */}
           <div
@@ -112,8 +146,8 @@ export default function ScannerCamera({
             )}
           </div>
 
-          {/* Status chips top-left */}
-          <div className="absolute top-3 left-3 flex flex-col gap-2">
+          {/* Status chips — positioned below the mode switcher + slider overlay */}
+          <div className="absolute top-24 left-3 flex flex-col gap-2">
             {/* Detector status */}
             <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-black/50 backdrop-blur-sm">
               <div className={`w-1.5 h-1.5 rounded-full ${
@@ -187,23 +221,25 @@ export default function ScannerCamera({
 
       {/* Camera controls */}
       {isActive && (
-        <div className="absolute top-3 right-3 flex flex-col gap-2 z-10">
+        <div className="absolute top-3 right-3 flex flex-col gap-2 z-10" onClick={e => e.stopPropagation()}>
           <button
             onClick={onToggleFacing}
             className="w-11 h-11 rounded-xl bg-black/50 backdrop-blur-sm border border-white/10 flex items-center justify-center text-white/80 hover:bg-black/70 transition-colors"
           >
             <RotateCw className="w-4.5 h-4.5" />
           </button>
-          <button
-            onClick={onToggleScanning}
-            className={`w-11 h-11 rounded-xl backdrop-blur-sm border flex items-center justify-center transition-all ${
-              scanEnabled
-                ? 'bg-gold-500/30 border-gold-400/50 text-gold-400'
-                : 'bg-black/50 border-white/10 text-white/60'
-            }`}
-          >
-            {scanEnabled ? <Zap className="w-4.5 h-4.5" /> : <ZapOff className="w-4.5 h-4.5" />}
-          </button>
+          {hasTorch && (
+            <button
+              onClick={onToggleTorch}
+              className={`w-11 h-11 rounded-xl backdrop-blur-sm border flex items-center justify-center transition-all ${
+                torchOn
+                  ? 'bg-yellow-500/30 border-yellow-400/50 text-yellow-400'
+                  : 'bg-black/50 border-white/10 text-white/60'
+              }`}
+            >
+              {torchOn ? <Zap className="w-4.5 h-4.5" /> : <ZapOff className="w-4.5 h-4.5" />}
+            </button>
+          )}
           <button
             onClick={onStopCamera}
             className="w-11 h-11 rounded-xl bg-black/50 backdrop-blur-sm border border-white/10 flex items-center justify-center text-red-400 hover:bg-red-500/20 transition-colors"

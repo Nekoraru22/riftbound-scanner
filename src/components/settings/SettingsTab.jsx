@@ -1,5 +1,5 @@
 import React from 'react';
-import { Shield, Sparkles, RotateCcw, Info, Zap } from 'lucide-react';
+import { Shield, Sparkles, RotateCcw, Info, Zap, Heart, ExternalLink } from 'lucide-react';
 import { CONDITIONS, LANGUAGES } from '../../data/sampleCards.js';
 
 export default function SettingsTab({
@@ -117,6 +117,17 @@ export default function SettingsTab({
               Riot Games does not endorse or sponsor this project.
             </p>
           </div>
+
+          <a
+            href="https://github.com/Nekoraru22/riftbound-scanner"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-gradient-to-r from-pink-500/10 to-red-500/10 border border-pink-500/30 text-pink-300 hover:border-pink-400/50 hover:from-pink-500/20 hover:to-red-500/20 transition-all text-xs font-medium"
+          >
+            <Heart className="w-3.5 h-3.5 fill-current" />
+            Made by <strong>Nekoraru22</strong> — <span>View on GitHub</span>
+            <ExternalLink className="w-3 h-3" />
+          </a>
         </section>
       </div>
     </div>

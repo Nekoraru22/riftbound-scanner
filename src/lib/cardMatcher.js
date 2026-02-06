@@ -21,6 +21,7 @@ class CardMatcher {
     this.cards = [];
     this.gridSize = 8;
     this.ready = false;
+    this._tmpCanvas = null;
   }
 
   async initialize() {
@@ -28,10 +29,12 @@ class CardMatcher {
     if (!resp.ok) throw new Error(`Failed to load card DB: ${resp.status}`);
     const data = await resp.json();
     this.gridSize = data.gridSize;
-    this.cards = data.cards.map(c => ({
-      ...c,
-      f: new Float32Array(c.f),
-    }));
+    this.cards = data.cards.map(c => {
+      const f = new Float32Array(c.f);
+      let normSq = 0;
+      for (let i = 0; i < f.length; i++) normSq += f[i] * f[i];
+      return { ...c, f, norm: Math.sqrt(normSq) };
+    });
     this.ready = true;
     console.log(`[CardMatcher] Loaded ${this.cards.length} cards (${this.gridSize}x${this.gridSize} grid)`);
   }
@@ -63,11 +66,14 @@ class CardMatcher {
   }
 
   _computeColorGrid(canvas) {
-    const tmp = document.createElement('canvas');
-    tmp.width = this.gridSize;
-    tmp.height = this.gridSize;
-    tmp.getContext('2d').drawImage(canvas, 0, 0, this.gridSize, this.gridSize);
-    const data = tmp.getContext('2d').getImageData(0, 0, this.gridSize, this.gridSize).data;
+    if (!this._tmpCanvas) {
+      this._tmpCanvas = document.createElement('canvas');
+      this._tmpCanvas.width = this.gridSize;
+      this._tmpCanvas.height = this.gridSize;
+    }
+    const ctx = this._tmpCanvas.getContext('2d');
+    ctx.drawImage(canvas, 0, 0, this.gridSize, this.gridSize);
+    const data = ctx.getImageData(0, 0, this.gridSize, this.gridSize).data;
     const features = new Float32Array(this.gridSize * this.gridSize * 3);
     for (let i = 0, j = 0; i < data.length; i += 4) {
       features[j++] = data[i] / 255;

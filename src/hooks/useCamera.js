@@ -10,6 +10,7 @@ export function useCamera() {
   const [error, setError] = useState(null);
   const [facingMode, setFacingMode] = useState('environment'); // 'user' | 'environment'
   const [capabilities, setCapabilities] = useState(null);
+  const [torchOn, setTorchOn] = useState(false);
 
   const startCamera = useCallback(async () => {
     try {
@@ -45,6 +46,7 @@ export function useCamera() {
         setCapabilities(caps || null);
       }
 
+      setTorchOn(false);
       setIsActive(true);
     } catch (err) {
       console.error('[Camera] Error:', err);
@@ -61,8 +63,24 @@ export function useCamera() {
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
+    setTorchOn(false);
     setIsActive(false);
   }, []);
+
+  const toggleTorch = useCallback(async () => {
+    if (!streamRef.current) return;
+    const track = streamRef.current.getVideoTracks()[0];
+    if (!track) return;
+    const caps = track.getCapabilities?.();
+    if (!caps?.torch) return;
+    const next = !torchOn;
+    try {
+      await track.applyConstraints({ advanced: [{ torch: next }] });
+      setTorchOn(next);
+    } catch (err) {
+      console.error('[Camera] Torch error:', err);
+    }
+  }, [torchOn]);
 
   const toggleFacing = useCallback(() => {
     const newMode = facingMode === 'environment' ? 'user' : 'environment';
@@ -100,15 +118,20 @@ export function useCamera() {
     return canvas;
   }, [isActive]);
 
+  const hasTorch = !!(capabilities?.torch);
+
   return {
     videoRef,
     isActive,
     error,
     facingMode,
     capabilities,
+    hasTorch,
+    torchOn,
     startCamera,
     stopCamera,
     toggleFacing,
+    toggleTorch,
     captureFrame,
   };
 }

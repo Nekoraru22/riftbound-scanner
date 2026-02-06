@@ -304,3 +304,10 @@ riftbound-scanner-src/
         ├── cardMatcher.js  # Frontend matching logic
         └── cardDatabase.js # IndexedDB interface
 ```
+
+## Fun Fact: Photoshopped Card Images
+
+The card identification system relies on an 8x8 pixel color grid and cosine similarity — not text recognition or detailed features. This means Photoshop-modified card images (e.g., custom cards, artistic alters, or humorous edits) could also be recognized by the system, as long as the overall color distribution remains close enough to the original card. If the general color composition is preserved (background, borders, dominant palette), the system may still identify it as the original card. The more the color distribution is altered, the lower the cosine similarity will be, making it more likely to go unrecognized or be confused with a different card.
+
+## TODO
+- [] Investigate how the model detects the position of the cards for the validation phase, maybe more parameters like deformation can be extracted to improve the accuracy of the model

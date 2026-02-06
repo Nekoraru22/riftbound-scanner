@@ -4,8 +4,8 @@ import { CONDITIONS, LANGUAGES, DOMAIN_COLORS, RARITY_STYLES, isFoilOnly } from 
 
 const ScannerCardRow = memo(function ScannerCardRow({ card, index, onUpdate, onRemove }) {
   const { cardData, quantity, condition, language, foil } = card;
-  const domainStyle = DOMAIN_COLORS[cardData.domain] || DOMAIN_COLORS.Fury;
-  const rarityStyle = RARITY_STYLES[cardData.rarity] || RARITY_STYLES.Common;
+  const domainStyle = DOMAIN_COLORS[cardData.domain] || DOMAIN_COLORS.colorless;
+  const rarityStyle = RARITY_STYLES[cardData.rarity] || RARITY_STYLES.common;
   const foilOnly = isFoilOnly(cardData.rarity);
 
   const handleFieldChange = (field, value) => {
@@ -15,18 +15,20 @@ const ScannerCardRow = memo(function ScannerCardRow({ card, index, onUpdate, onR
   return (
     <div className="rounded-xl bg-rift-700/50 border border-rift-600/20 p-3 fade-in">
       {/* Top row: name + delete */}
-      <div className="flex items-center gap-2 mb-2">
-        <span
-          className="w-2 h-2 rounded-full flex-shrink-0"
-          style={{ backgroundColor: domainStyle.hex }}
-        />
-        <span className={`text-[10px] font-mono font-bold ${rarityStyle.color}`}>
-          {rarityStyle.label}
-        </span>
-        <span className="text-[10px] font-mono text-rift-500">
-          #{cardData.collectorNumber}
-        </span>
-        <h4 className="flex-1 text-sm font-semibold text-rift-100 truncate">
+      <div className="flex items-start gap-2 mb-2">
+        <div className="flex items-center gap-1.5 pt-0.5">
+          <span
+            className="w-2 h-2 rounded-full flex-shrink-0"
+            style={{ backgroundColor: domainStyle.hex }}
+          />
+          <span className={`text-[10px] font-mono font-bold ${rarityStyle.color}`}>
+            {rarityStyle.label}
+          </span>
+          <span className="text-[10px] font-mono text-rift-500">
+            #{cardData.collectorNumber}
+          </span>
+        </div>
+        <h4 className="flex-1 text-sm font-semibold text-rift-100 truncate pt-0.5">
           {cardData.name}
         </h4>
         <button

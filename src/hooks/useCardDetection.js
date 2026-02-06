@@ -18,8 +18,10 @@ export function useCardDetection({ enabled = false }) {
 
   const detectorRef = useRef(null);
   const scanLoopRef = useRef(null);
-  const lastMatchTimeRef = useRef(0);
   const lastMatchIdRef = useRef(null);
+  const candidateIdRef = useRef(null);
+  const candidateCountRef = useRef(0);
+  const noCardCountRef = useRef(0);
   const frameCountRef = useRef(0);
   const fpsTimerRef = useRef(Date.now());
 
@@ -31,12 +33,14 @@ export function useCardDetection({ enabled = false }) {
   // Keep refs synced with latest values
   useEffect(() => { enabledRef.current = enabled; }, [enabled]);
 
-  // Cooldown between matching the same card (ms)
-  const MATCH_COOLDOWN = 2000;
-  // Min time between scans (ms) - controls scan rate
+  // Min time between scans (ms)
   const SCAN_INTERVAL = 150;
   // Min cosine similarity for a valid match
   const SIMILARITY_THRESHOLD = 0.60;
+  // Consecutive frames with same card before accepting
+  const STABILITY_FRAMES = 3;
+  // Frames without any card before allowing re-scan of same card
+  const NO_CARD_RESET_FRAMES = 5;
 
   /**
    * Initialize the YOLO detector
@@ -56,9 +60,10 @@ export function useCardDetection({ enabled = false }) {
   }, []);
 
   /**
-   * Rotate a canvas 90 degrees clockwise
+   * Ensure canvas is in portrait orientation
    */
-  function rotateCanvas90(canvas) {
+  function ensurePortrait(canvas) {
+    if (canvas.width <= canvas.height) return canvas;
     const rot = document.createElement('canvas');
     rot.width = canvas.height;
     rot.height = canvas.width;
@@ -67,16 +72,6 @@ export function useCardDetection({ enabled = false }) {
     rctx.rotate(Math.PI / 2);
     rctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
     return rot;
-  }
-
-  /**
-   * Ensure canvas is in portrait orientation
-   */
-  function ensurePortrait(canvas) {
-    if (canvas.width > canvas.height) {
-      return rotateCanvas90(canvas);
-    }
-    return canvas;
   }
 
   /**
@@ -113,22 +108,18 @@ export function useCardDetection({ enabled = false }) {
 
   /**
    * Identify a card from a crop canvas using the CardMatcher database.
-   * Tries both normal and rotated orientations for best match.
+   * Crop is already portrait-oriented by ensurePortrait().
    */
   function identifyCard(cropCanvas, matcher) {
     if (!matcher || !matcher.cards || matcher.cards.length === 0) return null;
 
-    const featNormal = computeColorGrid(cropCanvas, matcher.gridSize);
-    const rotated = rotateCanvas90(cropCanvas);
-    const featRotated = computeColorGrid(rotated, matcher.gridSize);
+    const features = computeColorGrid(cropCanvas, matcher.gridSize);
 
     let bestCard = null;
     let bestSim = -1;
 
     for (const c of matcher.cards) {
-      const s1 = cosineSimilarity(featNormal, c.f);
-      const s2 = cosineSimilarity(featRotated, c.f);
-      const sim = Math.max(s1, s2);
+      const sim = cosineSimilarity(features, c.f);
       if (sim > bestSim) {
         bestSim = sim;
         bestCard = c;
@@ -140,7 +131,6 @@ export function useCardDetection({ enabled = false }) {
 
   /**
    * Resolve card data from a matcher card to full card format.
-   * Card data comes directly from the matcher (card-hashes.json).
    */
   function resolveCardData(matcherCard) {
     if (!matcherCard) return null;
@@ -150,18 +140,23 @@ export function useCardDetection({ enabled = false }) {
       id: matcherCard.id,
       name: matcherCard.name,
       collectorNumber,
+      code: matcherCard.code,
       set: matcherCard.set,
       setName: matcherCard.setName,
       domain: matcherCard.domain,
+      domains: matcherCard.domains,
       rarity: matcherCard.rarity,
       type: matcherCard.type,
+      energy: matcherCard.energy,
+      might: matcherCard.might,
+      tags: matcherCard.tags,
+      illustrator: matcherCard.illustrator,
+      text: matcherCard.text,
     };
   }
 
   /**
    * Process a single video frame
-   * @param {HTMLCanvasElement} frameCanvas - Current frame from camera
-   * @returns {Object|null} Detection result or null
    */
   const processFrame = useCallback(async (frameCanvas) => {
     if (!detectorRef.current || detectorRef.current.state !== DetectorState.READY) {
@@ -177,17 +172,23 @@ export function useCardDetection({ enabled = false }) {
 
       if (detections.length === 0) {
         setLastDetection(null);
+        noCardCountRef.current++;
+        if (noCardCountRef.current >= NO_CARD_RESET_FRAMES) {
+          lastMatchIdRef.current = null;
+          candidateIdRef.current = null;
+          candidateCountRef.current = 0;
+        }
         return null;
       }
 
-      // Take the highest confidence detection
+      noCardCountRef.current = 0;
       const bestDetection = detections[0];
 
-      // Step 2: Ensure portrait orientation on the crop
+      // Step 2: Ensure portrait orientation
       let crop = bestDetection.cropCanvas;
       crop = ensurePortrait(crop);
 
-      // Step 3: Match using color grid + cosine similarity (both orientations)
+      // Step 3: Match using color grid + cosine similarity
       const matchResult = identifyCard(crop, matcher);
 
       if (!matchResult || matchResult.similarity < SIMILARITY_THRESHOLD) {
@@ -199,20 +200,30 @@ export function useCardDetection({ enabled = false }) {
         return null;
       }
 
-      // Step 4: Deduplication - prevent rapid re-scans of same card
-      const now = Date.now();
-      if (matchResult.card.id === lastMatchIdRef.current &&
-          now - lastMatchTimeRef.current < MATCH_COOLDOWN) {
-        return null; // Same card, within cooldown
+      // Step 4: Deduplication
+      const matchId = matchResult.card.id;
+      if (matchId === lastMatchIdRef.current) {
+        return null;
       }
 
-      // Step 5: Resolve full card data
+      // Step 5: Stability check
+      if (matchId === candidateIdRef.current) {
+        candidateCountRef.current++;
+      } else {
+        candidateIdRef.current = matchId;
+        candidateCountRef.current = 1;
+      }
+      if (candidateCountRef.current < STABILITY_FRAMES) {
+        return null;
+      }
+
+      // Step 6: Resolve full card data
       const cardData = resolveCardData(matchResult.card);
       if (!cardData) return null;
 
-      // Update tracking
-      lastMatchIdRef.current = matchResult.card.id;
-      lastMatchTimeRef.current = now;
+      lastMatchIdRef.current = matchId;
+      candidateIdRef.current = null;
+      candidateCountRef.current = 0;
 
       const result = {
         cardData,
@@ -220,7 +231,7 @@ export function useCardDetection({ enabled = false }) {
         confidence: bestDetection.confidence,
         box: bestDetection.box,
         matched: true,
-        timestamp: now,
+        timestamp: Date.now(),
       };
 
       setLastDetection(result);
@@ -233,19 +244,15 @@ export function useCardDetection({ enabled = false }) {
 
   /**
    * Start continuous scanning loop
-   * @param {function} captureFrame - Function that returns current camera frame as canvas
-   * @param {function} onCardDetected - Callback when a new card is detected
    */
   const startScanning = useCallback((captureFrame, onCardDetected) => {
     if (scanLoopRef.current) return;
 
-    // Store callbacks in refs so scan loop always uses latest
     captureFrameRef.current = captureFrame;
     onCardDetectedRef.current = onCardDetected;
     setIsScanning(true);
 
     const scanLoop = async () => {
-      // Use refs to avoid stale closures
       if (!enabledRef.current) {
         scanLoopRef.current = setTimeout(scanLoop, SCAN_INTERVAL);
         return;
@@ -259,7 +266,7 @@ export function useCardDetection({ enabled = false }) {
         }
       }
 
-      // Update FPS counter on every scan cycle
+      // Update FPS counter
       frameCountRef.current++;
       const now = Date.now();
       const elapsed = now - fpsTimerRef.current;
@@ -292,7 +299,10 @@ export function useCardDetection({ enabled = false }) {
    */
   const resetCooldown = useCallback(() => {
     lastMatchIdRef.current = null;
-    lastMatchTimeRef.current = 0;
+    candidateIdRef.current = null;
+    candidateCountRef.current = 0;
+    noCardCountRef.current = 0;
+    setLastDetection(null);
   }, []);
 
   // Cleanup on unmount
