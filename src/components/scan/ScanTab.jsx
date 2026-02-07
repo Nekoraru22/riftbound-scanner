@@ -348,10 +348,14 @@ export default function ScanTab({
         });
       }
 
-      const matched = results.filter(r => r.matchResult && r.matchResult.similarity > 0.55);
+      const matched = matcher.ready
+        ? results.filter(r => r.matchResult && r.matchResult.similarity >= minConfidence)
+        : results;
       setDetections(matched);
-      showNotification(`${matched.length} card${matched.length !== 1 ? 's' : ''} detected`, 'success');
-      if (results.length > 0) setSelectedDetection(0);
+      if (matched.length > 0) {
+        showNotification(`${matched.length} card${matched.length !== 1 ? 's' : ''} detected`, 'success');
+        setSelectedDetection(0);
+      }
     } catch (error) {
       console.error('[ScanTab] Detection error:', error);
       showNotification('Error during detection', 'error');

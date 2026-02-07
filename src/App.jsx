@@ -58,7 +58,7 @@ export default function App() {
   const [notification, setNotification] = useState(null);
 
   // Scan settings
-  const [minConfidence, setMinConfidence] = useState(0.93);
+  const [minConfidence, setMinConfidence] = useState(0.80);
 
   // Batch defaults
   const [batchDefaults, setBatchDefaults] = useState(() =>
