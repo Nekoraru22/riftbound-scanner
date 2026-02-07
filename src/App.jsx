@@ -71,7 +71,7 @@ export default function App() {
 
   // Model preference (normal or quantized)
   const [modelPreference, setModelPreference] = useState(() =>
-    loadFromStorage(STORAGE_KEYS.MODEL_PREFERENCE, 'normal')
+    loadFromStorage(STORAGE_KEYS.MODEL_PREFERENCE, 'quantized')
   );
 
   // ─── Hooks ─────────────────────────────────────────────────

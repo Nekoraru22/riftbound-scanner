@@ -39,7 +39,7 @@ class YOLODetector {
     this.iouThreshold = 0.45;
     this.useSimulation = true; // Toggle for demo mode
     this.modelFormat = 'onnx'; // 'onnx' or 'tfjs'
-    this.modelPreference = 'normal'; // 'normal' or 'quantized'
+    this.modelPreference = 'quantized'; // 'normal' or 'quantized'
     this._warmupComplete = false;
   }
 

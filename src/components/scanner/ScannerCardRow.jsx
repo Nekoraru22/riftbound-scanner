@@ -14,33 +14,45 @@ const ScannerCardRow = memo(function ScannerCardRow({ card, index, onUpdate, onR
 
   return (
     <div className="rounded-xl bg-rift-700/50 border border-rift-600/20 p-3 fade-in">
-      {/* Top row: name + delete */}
-      <div className="flex items-start gap-2 mb-2">
-        <div className="flex items-center gap-1.5 pt-0.5">
-          <span
-            className="w-2 h-2 rounded-full flex-shrink-0"
-            style={{ backgroundColor: domainStyle.hex }}
+      <div className="flex gap-3">
+        {/* Card thumbnail */}
+        <div className="w-12 h-16 rounded-lg overflow-hidden bg-rift-800 border border-rift-600/30 flex-shrink-0">
+          <img
+            src={`/cards/${cardData.id}.webp`}
+            alt={cardData.name}
+            className="w-full h-full object-cover"
+            loading="lazy"
           />
-          <span className={`text-[10px] font-mono font-bold ${rarityStyle.color}`}>
-            {rarityStyle.label}
-          </span>
-          <span className="text-[10px] font-mono text-rift-500">
-            #{cardData.collectorNumber}
-          </span>
         </div>
-        <h4 className="flex-1 text-sm font-semibold text-rift-100 truncate pt-0.5">
-          {cardData.name}
-        </h4>
-        <button
-          onClick={() => onRemove(index)}
-          className="p-1 rounded-lg text-rift-500 hover:text-red-400 hover:bg-red-400/10 transition-colors flex-shrink-0"
-        >
-          <Trash2 className="w-3.5 h-3.5" />
-        </button>
-      </div>
 
-      {/* Bottom row: qty, condition, language, foil */}
-      <div className="flex items-center gap-2">
+        <div className="flex-1 min-w-0">
+          {/* Top row: name + delete */}
+          <div className="flex items-start gap-2 mb-2">
+            <div className="flex items-center gap-1.5 pt-0.5">
+              <span
+                className="w-2 h-2 rounded-full flex-shrink-0"
+                style={{ backgroundColor: domainStyle.hex }}
+              />
+              <span className={`text-[10px] font-mono font-bold ${rarityStyle.color}`}>
+                {rarityStyle.label}
+              </span>
+              <span className="text-[10px] font-mono text-rift-500">
+                #{cardData.collectorNumber}
+              </span>
+            </div>
+            <h4 className="flex-1 text-sm font-semibold text-rift-100 truncate pt-0.5">
+              {cardData.name}
+            </h4>
+            <button
+              onClick={() => onRemove(index)}
+              className="p-1 rounded-lg text-rift-500 hover:text-red-400 hover:bg-red-400/10 transition-colors flex-shrink-0"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {/* Bottom row: qty, condition, language, foil */}
+          <div className="flex items-center gap-2">
         {/* Quantity */}
         <div className="flex items-center gap-0.5">
           <button
@@ -101,6 +113,8 @@ const ScannerCardRow = memo(function ScannerCardRow({ card, index, onUpdate, onR
           <Sparkles className="w-3 h-3" />
           {foilOnly && <span className="text-[8px] font-mono">F</span>}
         </button>
+      </div>
+        </div>
       </div>
     </div>
   );

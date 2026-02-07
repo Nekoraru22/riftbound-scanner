@@ -129,11 +129,11 @@ export default function DetectionCanvas({ image, detections, selectedIndex, onSe
   if (!image) return null;
 
   return (
-    <div ref={containerRef} className="rounded-2xl overflow-hidden border border-rift-600/20 max-w-lg mx-auto">
+    <div ref={containerRef} className="rounded-2xl overflow-hidden border border-rift-600/20 flex items-center justify-center">
       <canvas
         ref={canvasRef}
         onClick={handleCanvasClick}
-        className="w-full h-auto cursor-pointer"
+        className="max-h-[calc(100vh-18rem)] w-auto max-w-full h-auto cursor-pointer"
       />
     </div>
   );

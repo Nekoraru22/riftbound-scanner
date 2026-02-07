@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Shield, Sparkles, RotateCcw, Info, Zap, Heart, ExternalLink, Cpu } from 'lucide-react';
 import { CONDITIONS, LANGUAGES } from '../../data/sampleCards.js';
 
@@ -8,8 +8,23 @@ export default function SettingsTab({
   modelPreference,
   onUpdateModelPreference,
 }) {
+  const [showNeko, setShowNeko] = useState(false);
+  const scrollRef = useRef(null);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 20;
+      setShowNeko(atBottom);
+    };
+    onScroll();
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
   return (
-    <div className="flex-1 overflow-y-auto pb-20">
+    <div ref={scrollRef} className="flex-1 overflow-y-auto pb-20">
       <div className="px-4 pt-5 pb-4 space-y-4">
         {/* Page title */}
         <div className="mb-2">
@@ -188,7 +203,20 @@ export default function SettingsTab({
             <ExternalLink className="w-3 h-3" />
           </a>
         </section>
+
       </div>
+
+      {/* Neko mascot — sitting on top of the bottom tab bar */}
+      {showNeko && (
+        <div className="fixed bottom-16 right-4 pointer-events-none select-none z-10 fade-in">
+          <img
+            src="/images/neko.webp"
+            alt=""
+            className="w-28 h-28 object-contain drop-shadow-lg"
+            draggable={false}
+          />
+        </div>
+      )}
     </div>
   );
 }
