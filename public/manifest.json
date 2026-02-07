@@ -1,7 +1,7 @@
 {
-  "name": "RiftBound Scanner",
-  "short_name": "RB Scanner",
-  "description": "Escanea y cataloga tus cartas RiftBound TCG con IA",
+  "name": "Riftbound Scanner",
+  "short_name": "Riftbound Scanner",
+  "description": "Free, offline AI-powered RiftBound TCG card scanner",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0a0e17",
@@ -9,14 +9,16 @@
   "orientation": "portrait",
   "icons": [
     {
-      "src": "/icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png"
+      "src": "/images/neko.webp",
+      "sizes": "512x512",
+      "type": "image/webp",
+      "purpose": "any"
     },
     {
-      "src": "/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png"
+      "src": "/images/neko.webp",
+      "sizes": "192x192",
+      "type": "image/webp",
+      "purpose": "any"
     }
   ]
 }
