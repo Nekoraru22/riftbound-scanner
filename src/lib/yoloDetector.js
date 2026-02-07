@@ -14,7 +14,11 @@
  * basic image analysis to detect card-like rectangles.
  */
 
-const MODEL_URL = '/models/yolo11n-obb-riftbound/model.json';
+const MODEL_URLS = {
+  normal: '/models/yolo11n-obb-riftbound.onnx',
+  quantized: '/models/yolo11n-obb-riftbound-q8.onnx',
+  tfjs: '/models/yolo11n-obb-riftbound/model.json', // Fallback for backward compatibility
+};
 
 // Detection states
 export const DetectorState = {
@@ -28,33 +32,72 @@ export const DetectorState = {
 class YOLODetector {
   constructor() {
     this.model = null;
+    this.onnxSession = null;
     this.state = DetectorState.UNLOADED;
     this.inputSize = 640; // YOLO11 default input size
     this.confidenceThreshold = 0.6;
     this.iouThreshold = 0.45;
     this.useSimulation = true; // Toggle for demo mode
+    this.modelFormat = 'onnx'; // 'onnx' or 'tfjs'
+    this.modelPreference = 'normal'; // 'normal' or 'quantized'
     this._warmupComplete = false;
   }
 
   /**
    * Load the YOLO model and perform warmup inference
+   * @param {string} modelPreference - 'normal' or 'quantized'
    */
-  async initialize() {
+  async initialize(modelPreference = 'normal') {
     this.state = DetectorState.LOADING;
+    this.modelPreference = modelPreference;
 
     try {
-      // Attempt to load real TF.js model
-      if (typeof window !== 'undefined' && window.tf) {
+      // Try to load ONNX model first (preferred)
+      if (typeof window !== 'undefined' && window.ort) {
         try {
-          this.model = await window.tf.loadGraphModel(MODEL_URL);
+          const modelUrl = MODEL_URLS[modelPreference];
+          console.log('[YOLO] Loading ONNX model:', modelUrl);
+
+          this.onnxSession = await window.ort.InferenceSession.create(modelUrl, {
+            executionProviders: ['wasm'],
+            graphOptimizationLevel: 'all',
+          });
+
+          this.modelFormat = 'onnx';
           this.useSimulation = false;
-          console.log('[YOLO] Model loaded from', MODEL_URL);
+          console.log('[YOLO] ONNX model loaded:', modelPreference);
+        } catch (e) {
+          console.warn('[YOLO] Could not load ONNX model, trying TF.js fallback:', e.message);
+
+          // Fallback to TF.js if ONNX fails
+          if (window.tf) {
+            try {
+              this.model = await window.tf.loadGraphModel(MODEL_URLS.tfjs);
+              this.modelFormat = 'tfjs';
+              this.useSimulation = false;
+              console.log('[YOLO] TF.js model loaded (fallback)');
+            } catch (tfjsError) {
+              console.warn('[YOLO] TF.js also failed, using simulation mode:', tfjsError.message);
+              this.useSimulation = true;
+            }
+          } else {
+            console.log('[YOLO] ONNX Runtime not available, using simulation mode');
+            this.useSimulation = true;
+          }
+        }
+      } else if (typeof window !== 'undefined' && window.tf) {
+        // No ONNX Runtime, try TF.js
+        try {
+          this.model = await window.tf.loadGraphModel(MODEL_URLS.tfjs);
+          this.modelFormat = 'tfjs';
+          this.useSimulation = false;
+          console.log('[YOLO] TF.js model loaded');
         } catch (e) {
           console.warn('[YOLO] Could not load model, using simulation mode:', e.message);
           this.useSimulation = true;
         }
       } else {
-        console.log('[YOLO] TensorFlow.js not available, using simulation mode');
+        console.log('[YOLO] No model runtime available, using simulation mode');
         this.useSimulation = true;
       }
 
@@ -63,7 +106,8 @@ class YOLODetector {
       await this._warmup();
 
       this.state = DetectorState.READY;
-      console.log('[YOLO] Detector ready (mode:', this.useSimulation ? 'simulation' : 'model', ')');
+      const mode = this.useSimulation ? 'simulation' : `${this.modelFormat} (${modelPreference})`;
+      console.log('[YOLO] Detector ready (mode:', mode, ')');
     } catch (error) {
       this.state = DetectorState.ERROR;
       console.error('[YOLO] Initialization failed:', error);
@@ -72,11 +116,18 @@ class YOLODetector {
   }
 
   async _warmup() {
-    if (!this.useSimulation && this.model) {
-      // Real warmup: create dummy tensor and run inference
-      const dummyInput = window.tf.zeros([1, this.inputSize, this.inputSize, 3]);
-      await this.model.predict(dummyInput);
-      dummyInput.dispose();
+    if (!this.useSimulation) {
+      if (this.modelFormat === 'onnx' && this.onnxSession) {
+        // ONNX warmup: create dummy tensor and run inference
+        const dummyData = new Float32Array(this.inputSize * this.inputSize * 3).fill(0.5);
+        const dummyTensor = new window.ort.Tensor('float32', dummyData, [1, 3, this.inputSize, this.inputSize]);
+        await this.onnxSession.run({ images: dummyTensor });
+      } else if (this.modelFormat === 'tfjs' && this.model) {
+        // TF.js warmup: create dummy tensor and run inference
+        const dummyInput = window.tf.zeros([1, this.inputSize, this.inputSize, 3]);
+        await this.model.predict(dummyInput);
+        dummyInput.dispose();
+      }
     } else {
       // Simulated warmup: small delay to mimic
       await new Promise(resolve => setTimeout(resolve, 300));
@@ -105,13 +156,93 @@ class YOLODetector {
       return this._simulatedDetect(source);
     }
 
-    return this._modelDetect(source);
+    if (this.modelFormat === 'onnx') {
+      return this._onnxDetect(source);
+    }
+
+    return this._tfjsDetect(source);
   }
 
   /**
-   * Real model inference pipeline
+   * ONNX model inference pipeline
    */
-  async _modelDetect(source) {
+  async _onnxDetect(source) {
+    const srcW = source.width || source.videoWidth;
+    const srcH = source.height || source.videoHeight;
+
+    // Letterbox preprocess: maintain aspect ratio, pad with 114/255 gray
+    const scale = Math.min(this.inputSize / srcW, this.inputSize / srcH);
+    const newW = Math.round(srcW * scale);
+    const newH = Math.round(srcH * scale);
+    const padX = (this.inputSize - newW) / 2;
+    const padY = (this.inputSize - newH) / 2;
+
+    // Create canvas for preprocessing
+    const canvas = document.createElement('canvas');
+    canvas.width = this.inputSize;
+    canvas.height = this.inputSize;
+    const ctx = canvas.getContext('2d');
+
+    // Fill with gray (114)
+    ctx.fillStyle = '#727272';
+    ctx.fillRect(0, 0, this.inputSize, this.inputSize);
+
+    // Draw resized image
+    ctx.drawImage(source, 0, 0, srcW, srcH, padX, padY, newW, newH);
+
+    // Get image data and convert to NCHW format (channels first)
+    const imageData = ctx.getImageData(0, 0, this.inputSize, this.inputSize);
+    const data = imageData.data;
+    const inputData = new Float32Array(3 * this.inputSize * this.inputSize);
+
+    // Convert RGBA to RGB and normalize to [0, 1], channels first
+    for (let i = 0; i < this.inputSize * this.inputSize; i++) {
+      inputData[i] = data[i * 4] / 255.0; // R
+      inputData[this.inputSize * this.inputSize + i] = data[i * 4 + 1] / 255.0; // G
+      inputData[2 * this.inputSize * this.inputSize + i] = data[i * 4 + 2] / 255.0; // B
+    }
+
+    // Create ONNX tensor
+    const tensor = new window.ort.Tensor('float32', inputData, [1, 3, this.inputSize, this.inputSize]);
+
+    // Run inference
+    const results = await this.onnxSession.run({ images: tensor });
+    const output = results.output0 || results[Object.keys(results)[0]];
+    const outputData = output.data;
+
+    // Post-process OBB outputs
+    // YOLO11 OBB output shape: [1, 6, 8400] (transposed)
+    const detections = [];
+    const numDetections = 8400;
+
+    for (let i = 0; i < numDetections; i++) {
+      const conf = outputData[4 * numDetections + i];
+
+      if (conf >= this.confidenceThreshold) {
+        // Map from letterbox space back to original image coords
+        const cx = (outputData[0 * numDetections + i] - padX) / scale;
+        const cy = (outputData[1 * numDetections + i] - padY) / scale;
+        const w = outputData[2 * numDetections + i] / scale;
+        const h = outputData[3 * numDetections + i] / scale;
+        const angle = outputData[5 * numDetections + i];
+
+        const cropCanvas = this._cropRotated(source, cx, cy, w, h, angle);
+
+        detections.push({
+          box: { cx, cy, w, h, angle },
+          confidence: conf,
+          cropCanvas,
+        });
+      }
+    }
+
+    return this._nmsOBB(detections);
+  }
+
+  /**
+   * TensorFlow.js model inference pipeline
+   */
+  async _tfjsDetect(source) {
     const tf = window.tf;
 
     const srcW = source.width || source.videoWidth;
@@ -355,6 +486,10 @@ class YOLODetector {
     if (this.model) {
       this.model.dispose();
       this.model = null;
+    }
+    if (this.onnxSession) {
+      // ONNX sessions don't have a dispose method, just set to null
+      this.onnxSession = null;
     }
     this.state = DetectorState.UNLOADED;
   }

@@ -16,6 +16,8 @@ image = (
         "onnxslim>=0.1.71",
         "sng4onnx>=1.0.1",
         "onnx_graphsurgeon>=0.3.26",
+        "onnx>=1.12.0",
+        "onnxruntime>=1.14.0",
     )
 )
 
@@ -68,8 +70,12 @@ def main(skip_upload: bool = False, export_only: bool = False):
     print("Starting training...")
     train_model.remote()
 
+    # Quantize model
+    print("\nQuantizing model...")
+    quantize_model.remote()
+
     # Download results
-    print("Downloading trained model...")
+    print("\nDownloading trained model...")
     output_dir = base_dir / "runs"
     output_dir.mkdir(exist_ok=True)
 
@@ -129,30 +135,53 @@ def _upload_dataset(base_dir):
 
 def _copy_model_to_public(base_dir):
     """
-    Copies the exported TF.js model to the public web app directory.
+    Copies the exported TF.js and ONNX models to the public web app directory.
 
     Arguments:
         base_dir: The model directory containing the runs folder.
     """
     import shutil
 
-    src = base_dir / "runs" / "train" / "weights" / "best_web_model"
+    weights_dir = base_dir / "runs" / "train" / "weights"
     models_dir = base_dir.parent / "public" / "models"
-    dst = models_dir / "yolo11n-obb-riftbound"
 
-    if not src.exists():
-        print(f"Model not found at {src}, skipping copy to public/")
-        return
+    # Copy TF.js model
+    tfjs_src = weights_dir / "best_web_model"
+    tfjs_dst = models_dir / "yolo11n-obb-riftbound"
 
-    # Clean up old models
-    if models_dir.exists():
-        shutil.rmtree(models_dir)
-        print(f"Cleaned {models_dir}")
+    if not tfjs_src.exists():
+        print(f"TF.js model not found at {tfjs_src}, skipping copy to public/")
+    else:
+        # Clean up old models
+        if models_dir.exists():
+            shutil.rmtree(models_dir)
+            print(f"Cleaned {models_dir}")
 
-    if dst.exists():
-        shutil.rmtree(dst)
-    shutil.copytree(src, dst)
-    print(f"Model copied to {dst}")
+        models_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(tfjs_src, tfjs_dst)
+        print(f"TF.js model copied to {tfjs_dst}")
+
+    # Copy ONNX model (non-quantized)
+    onnx_src = weights_dir / "best.onnx"
+    onnx_dst = models_dir / "yolo11n-obb-riftbound.onnx"
+
+    if not onnx_src.exists():
+        print(f"ONNX model not found at {onnx_src}, skipping copy to public/")
+    else:
+        models_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(onnx_src, onnx_dst)
+        print(f"ONNX model copied to {onnx_dst}")
+
+    # Copy ONNX model (quantized int8)
+    onnx_q8_src = weights_dir / "best_quantized.onnx"
+    onnx_q8_dst = models_dir / "yolo11n-obb-riftbound-q8.onnx"
+
+    if not onnx_q8_src.exists():
+        print(f"Quantized model not found at {onnx_q8_src}, skipping copy to public/")
+    else:
+        models_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(onnx_q8_src, onnx_q8_dst)
+        print(f"Quantized model (int8) copied to {onnx_q8_dst}")
 
 
 def _download_results(local_dir):
@@ -187,11 +216,11 @@ def _download_results(local_dir):
 )
 def export_model_fn():
     """
-    Exports a trained YOLO model to TensorFlow.js format.
+    Exports a trained YOLO model to TensorFlow.js and ONNX formats.
 
     Loads the best checkpoint from a previous training run and
-    exports it. Uses CPU device and opset 12 for maximum
-    compatibility with browser runtimes.
+    exports it to both formats. Uses CPU device and opset 12 for
+    maximum compatibility with browser runtimes.
     """
     import os
     import subprocess
@@ -203,13 +232,25 @@ def export_model_fn():
     if not os.path.exists(best_path):
         raise FileNotFoundError(f"Model not found at {best_path}. Train first.")
 
-    print("Exporting model to TensorFlow.js...")
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = ""
+
+    # Export to TensorFlow.js (for backward compatibility)
+    print("Exporting model to TensorFlow.js...")
     subprocess.run(
         [sys.executable, "-c",
          f"from ultralytics import YOLO; "
          f"YOLO('{best_path}').export(format='tfjs', imgsz=640, device='cpu', opset=12)"],
+        env=env,
+        check=True,
+    )
+
+    # Export to ONNX (non-quantized, for web use with ONNX Runtime)
+    print("Exporting model to ONNX...")
+    subprocess.run(
+        [sys.executable, "-c",
+         f"from ultralytics import YOLO; "
+         f"YOLO('{best_path}').export(format='onnx', imgsz=640, opset=12, simplify=True, dynamic=False, device='cpu')"],
         env=env,
         check=True,
     )
@@ -292,13 +333,15 @@ def train_model():
         degrees=15,
     )
 
-    # Export to TensorFlow.js in a subprocess with GPU hidden.
+    # Export to both TensorFlow.js and ONNX in a subprocess with GPU hidden.
     # CUDA_VISIBLE_DEVICES must be set before TF is imported, so we
     # can't do it in-process since PyTorch already initialized CUDA.
     import subprocess
     import sys
 
     best_path = os.path.join(REMOTE_RUNS_DIR, "train", "weights", "best.pt")
+
+    # Export to TensorFlow.js (for backward compatibility)
     print("Exporting model to TensorFlow.js...")
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = ""
@@ -310,8 +353,74 @@ def train_model():
         check=True,
     )
 
+    # Export to ONNX (non-quantized, for web use with ONNX Runtime)
+    print("Exporting model to ONNX...")
+    subprocess.run(
+        [sys.executable, "-c",
+         f"from ultralytics import YOLO; "
+         f"YOLO('{best_path}').export(format='onnx', imgsz=640, opset=12, simplify=True, dynamic=False, device='cpu')"],
+        env=env,
+        check=True,
+    )
+
     volume.commit()
     print("Training and export complete.")
+
+
+@app.function(
+    image=image,
+    cpu=4.0,
+    timeout=600,
+    volumes={"/data": volume},
+)
+def quantize_model():
+    """
+    Quantizes the trained YOLO model to int8 ONNX format.
+
+    Loads the ONNX model exported during training and applies dynamic
+    int8 quantization for optimal web performance.
+    """
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    volume.reload()
+
+    weights_dir = Path(REMOTE_RUNS_DIR) / "train" / "weights"
+    onnx_path = weights_dir / "best.onnx"
+    quantized_path = weights_dir / "best_quantized.onnx"
+
+    if not onnx_path.exists():
+        print(f"ONNX model not found at {onnx_path}, skipping quantization")
+        return
+
+    print("\n" + "=" * 60)
+    print("Quantizing model to int8...")
+    print("=" * 60)
+
+    original_size = onnx_path.stat().st_size / (1024 * 1024)
+    print(f"Original ONNX model: {original_size:.2f} MB")
+
+    # Quantize to int8
+    subprocess.run(
+        [sys.executable, "-c",
+         f"from onnxruntime.quantization import quantize_dynamic, QuantType; "
+         f"quantize_dynamic('{onnx_path}', '{quantized_path}', weight_type=QuantType.QUInt8)"],
+        check=True,
+    )
+
+    if not quantized_path.exists():
+        print("Quantization failed")
+        return
+
+    quantized_size = quantized_path.stat().st_size / (1024 * 1024)
+    print(f"Quantized model: {quantized_size:.2f} MB")
+    print(f"Size reduction: {100 * (1 - quantized_size/original_size):.1f}%")
+    print("=" * 60)
+
+    volume.commit()
+    print("Quantization complete.")
 
 
 def _print_dataset_debug(dataset_dir: str) -> None:

@@ -44,14 +44,15 @@ export function useCardDetection({ enabled = false }) {
 
   /**
    * Initialize the YOLO detector
+   * @param {string} modelPreference - 'normal' or 'quantized'
    */
-  const initDetector = useCallback(async () => {
+  const initDetector = useCallback(async (modelPreference = 'normal') => {
     try {
       const detector = getDetector();
       detectorRef.current = detector;
       setDetectorState(DetectorState.LOADING);
 
-      await detector.initialize();
+      await detector.initialize(modelPreference);
       setDetectorState(detector.state);
     } catch (error) {
       console.error('[Detection] Init failed:', error);

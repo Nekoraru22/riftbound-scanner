@@ -11,3 +11,4 @@ model/pictures
 model/runs
 public/*
 nul
+dist/

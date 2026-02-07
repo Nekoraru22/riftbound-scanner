@@ -17,6 +17,7 @@ const STORAGE_KEYS = {
   SCANNED_CARDS: 'riftbound_scanned_cards',
   PENDING_CARDS: 'riftbound_pending_cards',
   BATCH_DEFAULTS: 'riftbound_batch_defaults',
+  MODEL_PREFERENCE: 'riftbound_model_preference',
 };
 
 function saveToStorage(key, data) {
@@ -68,6 +69,11 @@ export default function App() {
     })
   );
 
+  // Model preference (normal or quantized)
+  const [modelPreference, setModelPreference] = useState(() =>
+    loadFromStorage(STORAGE_KEYS.MODEL_PREFERENCE, 'normal')
+  );
+
   // ─── Hooks ─────────────────────────────────────────────────
   const camera = useCamera();
 
@@ -94,10 +100,10 @@ export default function App() {
   useEffect(() => {
     async function init() {
       try {
-        // Stage 1: Initialize YOLO detector (warmup)
+        // Stage 1: Initialize YOLO detector (warmup) with model preference
         setLoadStage('model');
         setLoadProgress(0.2);
-        await detection.initDetector();
+        await detection.initDetector(modelPreference);
         setLoadProgress(0.5);
 
         // Stage 2: Initialize card matcher (loads card-hashes.json)
@@ -117,7 +123,7 @@ export default function App() {
       }
     }
     init();
-  }, []);
+  }, [modelPreference]);
 
   // Show notification if state was restored from previous session
   useEffect(() => {
@@ -146,6 +152,10 @@ export default function App() {
     saveToStorage(STORAGE_KEYS.BATCH_DEFAULTS, batchDefaults);
   }, [batchDefaults]);
 
+  useEffect(() => {
+    saveToStorage(STORAGE_KEYS.MODEL_PREFERENCE, modelPreference);
+  }, [modelPreference]);
+
   // Force save on page visibility change (mobile camera returns trigger this)
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -153,6 +163,7 @@ export default function App() {
         saveToStorage(STORAGE_KEYS.SCANNED_CARDS, scannedCards);
         saveToStorage(STORAGE_KEYS.PENDING_CARDS, pendingCards);
         saveToStorage(STORAGE_KEYS.BATCH_DEFAULTS, batchDefaults);
+        saveToStorage(STORAGE_KEYS.MODEL_PREFERENCE, modelPreference);
       }
     };
 
@@ -160,6 +171,7 @@ export default function App() {
       saveToStorage(STORAGE_KEYS.SCANNED_CARDS, scannedCards);
       saveToStorage(STORAGE_KEYS.PENDING_CARDS, pendingCards);
       saveToStorage(STORAGE_KEYS.BATCH_DEFAULTS, batchDefaults);
+      saveToStorage(STORAGE_KEYS.MODEL_PREFERENCE, modelPreference);
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -171,7 +183,7 @@ export default function App() {
       window.removeEventListener('beforeunload', handleBeforeUnload);
       window.removeEventListener('pagehide', handleBeforeUnload);
     };
-  }, [scannedCards, pendingCards, batchDefaults]);
+  }, [scannedCards, pendingCards, batchDefaults, modelPreference]);
 
   // ─── Refs for use in callbacks without stale closures ──
   const batchDefaultsRef = useRef(batchDefaults);
@@ -435,6 +447,8 @@ export default function App() {
           <SettingsTab
             batchDefaults={batchDefaults}
             onUpdateDefaults={setBatchDefaults}
+            modelPreference={modelPreference}
+            onUpdateModelPreference={setModelPreference}
           />
         )}
       </div>

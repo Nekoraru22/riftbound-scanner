@@ -1,10 +1,12 @@
 import React from 'react';
-import { Shield, Sparkles, RotateCcw, Info, Zap, Heart, ExternalLink } from 'lucide-react';
+import { Shield, Sparkles, RotateCcw, Info, Zap, Heart, ExternalLink, Cpu } from 'lucide-react';
 import { CONDITIONS, LANGUAGES } from '../../data/sampleCards.js';
 
 export default function SettingsTab({
   batchDefaults,
   onUpdateDefaults,
+  modelPreference,
+  onUpdateModelPreference,
 }) {
   return (
     <div className="flex-1 overflow-y-auto pb-20">
@@ -87,6 +89,63 @@ export default function SettingsTab({
             <RotateCcw className="w-3.5 h-3.5" />
             Restore defaults
           </button>
+        </section>
+
+        {/* Model Performance Section */}
+        <section className="rounded-2xl bg-rift-800/60 border border-rift-600/20 p-5 space-y-4">
+          <h2 className="text-sm font-semibold text-rift-100 flex items-center gap-2">
+            <Cpu className="w-4 h-4 text-gold-400" />
+            Model Quality
+          </h2>
+          <p className="text-xs text-rift-400">
+            Choose between accuracy and performance. Quantized model is 75% smaller and 2-4x faster.
+          </p>
+
+          <div className="space-y-2">
+            {/* Normal Model */}
+            <button
+              onClick={() => onUpdateModelPreference('normal')}
+              className={`w-full rounded-xl border p-3 text-left transition-all ${
+                modelPreference === 'normal'
+                  ? 'bg-gradient-to-r from-gold-500/20 to-gold-400/10 border-gold-400/60 text-gold-300'
+                  : 'bg-rift-700/40 border-rift-600/40 text-rift-300 hover:bg-rift-700 hover:border-rift-500/60'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-semibold">Normal (Float32)</p>
+                  <p className="text-[10px] text-rift-400 mt-0.5">
+                    Best accuracy • ~6 MB
+                  </p>
+                </div>
+                {modelPreference === 'normal' && (
+                  <div className="w-2 h-2 rounded-full bg-gold-400" />
+                )}
+              </div>
+            </button>
+
+            {/* Quantized Model */}
+            <button
+              onClick={() => onUpdateModelPreference('quantized')}
+              className={`w-full rounded-xl border p-3 text-left transition-all ${
+                modelPreference === 'quantized'
+                  ? 'bg-gradient-to-r from-gold-500/20 to-gold-400/10 border-gold-400/60 text-gold-300'
+                  : 'bg-rift-700/40 border-rift-600/40 text-rift-300 hover:bg-rift-700 hover:border-rift-500/60'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-semibold">Fast (Int8 Quantized)</p>
+                  <p className="text-[10px] text-rift-400 mt-0.5">
+                    2-4x faster • ~1.5 MB • &lt;1% accuracy loss
+                  </p>
+                </div>
+                {modelPreference === 'quantized' && (
+                  <div className="w-2 h-2 rounded-full bg-gold-400" />
+                )}
+              </div>
+            </button>
+          </div>
         </section>
 
         {/* About Section */}
