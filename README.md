@@ -32,8 +32,9 @@ A web application for scanning and cataloging RiftBound TCG cards using AI-power
 ├────────────────────────────────────────┤
 │  1. Upload dataset to Modal            │
 │  2. Train YOLO11n-OBB on cloud GPU     │
-│  3. Export to TensorFlow.js            │
-│  4. Download model to public/models/   │
+│  3. Export to TensorFlow.js + ONNX     │
+│  4. Quantize ONNX to int8              │
+│  5. Download models to public/models/  │
 └────────────────────────────────────────┘
 ```
 
@@ -261,7 +262,7 @@ modal run train.py --skip-upload    # Train only (dataset already uploaded)
 modal run train.py --export-only    # Export and download (already trained)
 ```
 
-Trains a YOLO11n-OBB model on an A10G GPU, exports to TensorFlow.js, and copies the model to `public/models/` for the web app.
+Trains a YOLO11n-OBB model on an A10G GPU, exports to both TensorFlow.js and ONNX formats, automatically quantizes the ONNX model to int8 for optimal web performance, and copies all model files to `public/models/` for the web app.
 
 Use `--detach` to run training in the background (you can close your terminal or shut down your PC):
 
@@ -286,39 +287,44 @@ The model struggled to detect cards on dark surfaces because the card borders ar
 
 These changes significantly improved detection accuracy on dark surfaces and organized card layouts.
 
-## Model Quantization
+## Model Formats & Optimization
 
-`quantize.py` converts the trained YOLO model to int8 quantized ONNX format for faster inference on web browsers and mobile devices.
+The training pipeline (`train.py`) automatically generates three optimized model formats:
 
-```bash
-modal run quantize.py
+| Format | Size | Speed | Use Case |
+|--------|------|-------|----------|
+| **TensorFlow.js** | ~6 MB | Baseline | Backward compatibility |
+| **ONNX (float32)** | ~5.5 MB | 1.5-2x faster | Modern browsers with ONNX Runtime |
+| **ONNX (int8)** | ~1.5 MB | 2-4x faster | Best performance, mobile-friendly |
+
+### Automatic Quantization
+
+After training completes, the pipeline automatically:
+
+1. **Exports to ONNX**: Converts the trained PyTorch model to ONNX format (float32)
+2. **Quantizes to int8**: Applies dynamic quantization using ONNX Runtime
+3. **Deploys**: Copies all model formats to `public/models/` for the web app
+
+```
+Training ──► Export ONNX ──► Quantize int8 ──► Deploy to public/
+best.pt      best.onnx       best_quantized     yolo11n-obb-riftbound-q8.onnx
+ 6 MB         5.5 MB          1.4 MB            (75% size reduction)
 ```
 
-### Benefits
+No additional steps required — all three formats are ready for use after `modal run train.py`.
 
-| Metric | Float32 (Normal) | Int8 (Quantized) | Improvement |
-|--------|------------------|------------------|-------------|
+### Quantization Benefits
+
+| Metric | Float32 | Int8 Quantized | Improvement |
+|--------|---------|----------------|-------------|
 | **Model Size** | ~6 MB | ~1.5 MB | 75% smaller |
 | **Inference Speed** | ~60-80ms/frame | ~30-50ms/frame | 2-4x faster |
 | **Memory Usage** | ~200 MB | ~100 MB | 50% less |
 | **Accuracy Loss** | - | <1% mAP | Negligible |
 
-### How It Works
+### Using Models in the Web App
 
-The quantization pipeline runs on Modal cloud and consists of three steps:
-
-1. **Export to ONNX (float32)**: Converts the PyTorch model to ONNX format
-2. **Quantize to int8**: Applies dynamic quantization using ONNX Runtime
-3. **Download & Deploy**: Copies the quantized model to `public/models/yolo11n-obb-riftbound-q8.onnx`
-
-```
-best.pt ──► best.onnx (float32) ──► best_quantized.onnx (int8) ──► public/models/
- 6 MB           5.5 MB                     1.4 MB                      ready for web
-```
-
-### Using Quantized Models in the Web App
-
-The web app automatically supports both model formats via ONNX Runtime Web:
+The web app supports all three formats via ONNX Runtime Web (primary) and TensorFlow.js (fallback):
 
 **Settings UI**: Users can choose between:
 - **Normal (Float32)**: Best accuracy, ~6 MB
@@ -358,8 +364,7 @@ riftbound-scanner-src/
 ├── public/
 │   ├── cards/              # Optimized card images (WebP)
 │   ├── card-hashes.json    # Color grid hashes
-│   ├── models/             # YOLO TF.js model files
-│   └── test.html           # Detection test page
+│   └── models/             # YOLO models (TF.js, ONNX, ONNX-int8)
 └── src/
     └── lib/
         ├── cardMatcher.js  # Frontend matching logic
