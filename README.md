@@ -375,5 +375,9 @@ riftbound-scanner-src/
 
 The card identification system relies on an 8x8 pixel color grid and cosine similarity — not text recognition or detailed features. This means Photoshop-modified card images (e.g., custom cards, artistic alters, or humorous edits) could also be recognized by the system, as long as the overall color distribution remains close enough to the original card. If the general color composition is preserved (background, borders, dominant palette), the system may still identify it as the original card. The more the color distribution is altered, the lower the cosine similarity will be, making it more likely to go unrecognized or be confused with a different card.
 
+## Example with picture
+<img width="2518" height="1288" alt="Sin título-1" src="https://github.com/user-attachments/assets/941b189b-494d-4756-baf0-63f694dd50cc" />
+
 ## TODO
 - [] Investigate how the model detects the position of the cards for the validation phase, maybe more parameters like deformation can be extracted to improve the accuracy of the model
+- [] Improve live scanner
