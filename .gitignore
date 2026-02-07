@@ -10,5 +10,6 @@ model/riftbound.db
 model/pictures
 model/runs
 public/*
+!public/images
 nul
 dist/
