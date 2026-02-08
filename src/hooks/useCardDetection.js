@@ -1,50 +1,26 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { getDetector, DetectorState } from '../lib/yoloDetector.js';
 import { getMatcher } from '../lib/cardMatcher.js';
 
 /**
- * Hook for continuous card detection and identification
+ * Hook for single-frame card detection (tap to scan).
  *
  * Orchestrates:
- *   1. YOLO detection on each frame
- *   2. Color grid matching on detected crops (via CardMatcher)
- *   3. Deduplication (prevents re-scanning the same card)
+ *   1. YOLO detection on a captured frame
+ *   2. Card matching on detected crops (via CardMatcher)
  */
-export function useCardDetection({ enabled = false }) {
+export function useCardDetection() {
   const [detectorState, setDetectorState] = useState(DetectorState.UNLOADED);
-  const [isScanning, setIsScanning] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [lastDetection, setLastDetection] = useState(null);
-  const [fps, setFps] = useState(0);
 
   const detectorRef = useRef(null);
-  const scanLoopRef = useRef(null);
-  const lastMatchIdRef = useRef(null);
-  const candidateIdRef = useRef(null);
-  const candidateCountRef = useRef(0);
-  const noCardCountRef = useRef(0);
-  const frameCountRef = useRef(0);
-  const fpsTimerRef = useRef(Date.now());
 
-  // Refs to avoid stale closures in scan loop
-  const enabledRef = useRef(enabled);
-  const captureFrameRef = useRef(null);
-  const onCardDetectedRef = useRef(null);
-
-  // Keep refs synced with latest values
-  useEffect(() => { enabledRef.current = enabled; }, [enabled]);
-
-  // Min time between scans (ms)
-  const SCAN_INTERVAL = 150;
   // Min cosine similarity for a valid match
   const SIMILARITY_THRESHOLD = 0.60;
-  // Consecutive frames with same card before accepting
-  const STABILITY_FRAMES = 3;
-  // Frames without any card before allowing re-scan of same card
-  const NO_CARD_RESET_FRAMES = 5;
 
   /**
    * Initialize the YOLO detector
-   * @param {string} modelPreference - 'normal' or 'quantized'
    */
   const initDetector = useCallback(async (modelPreference = 'normal') => {
     try {
@@ -76,58 +52,10 @@ export function useCardDetection({ enabled = false }) {
   }
 
   /**
-   * Compute color grid features from a canvas
-   */
-  function computeColorGrid(canvas, gridSize) {
-    const tmp = document.createElement('canvas');
-    tmp.width = gridSize;
-    tmp.height = gridSize;
-    tmp.getContext('2d').drawImage(canvas, 0, 0, gridSize, gridSize);
-    const data = tmp.getContext('2d').getImageData(0, 0, gridSize, gridSize).data;
-    const features = new Float32Array(gridSize * gridSize * 3);
-    for (let i = 0, j = 0; i < data.length; i += 4) {
-      features[j++] = data[i] / 255;
-      features[j++] = data[i + 1] / 255;
-      features[j++] = data[i + 2] / 255;
-    }
-    return features;
-  }
-
-  /**
-   * Cosine similarity between two feature vectors
-   */
-  function cosineSimilarity(a, b) {
-    let dot = 0, normA = 0, normB = 0;
-    for (let i = 0; i < a.length; i++) {
-      dot += a[i] * b[i];
-      normA += a[i] * a[i];
-      normB += b[i] * b[i];
-    }
-    const denom = Math.sqrt(normA) * Math.sqrt(normB);
-    return denom > 0 ? dot / denom : 0;
-  }
-
-  /**
-   * Identify a card from a crop canvas using the CardMatcher database.
-   * Crop is already portrait-oriented by ensurePortrait().
+   * Identify a card from a crop canvas using the CardMatcher.
    */
   function identifyCard(cropCanvas, matcher) {
-    if (!matcher || !matcher.cards || matcher.cards.length === 0) return null;
-
-    const features = computeColorGrid(cropCanvas, matcher.gridSize);
-
-    let bestCard = null;
-    let bestSim = -1;
-
-    for (const c of matcher.cards) {
-      const sim = cosineSimilarity(features, c.f);
-      if (sim > bestSim) {
-        bestSim = sim;
-        bestCard = c;
-      }
-    }
-
-    return { card: bestCard, similarity: bestSim };
+    return matcher.identify(cropCanvas);
   }
 
   /**
@@ -157,39 +85,38 @@ export function useCardDetection({ enabled = false }) {
   }
 
   /**
-   * Process a single video frame
+   * Detect cards in a single frame (tap to scan).
+   * Captures one frame, runs YOLO + matching, returns result.
    */
-  const processFrame = useCallback(async (frameCanvas) => {
-    if (!detectorRef.current || detectorRef.current.state !== DetectorState.READY) {
-      return null;
-    }
+  const detectSingleFrame = useCallback(async (captureFrame) => {
+    if (isProcessing) return null;
+    if (!detectorRef.current || detectorRef.current.state !== DetectorState.READY) return null;
 
     const matcher = getMatcher();
     if (!matcher.ready) return null;
 
+    const frame = captureFrame?.();
+    if (!frame) return null;
+
+    setIsProcessing(true);
+    setLastDetection(null);
+
     try {
       // Step 1: YOLO detection
-      const detections = await detectorRef.current.detect(frameCanvas);
+      const detections = await detectorRef.current.detect(frame);
 
       if (detections.length === 0) {
         setLastDetection(null);
-        noCardCountRef.current++;
-        if (noCardCountRef.current >= NO_CARD_RESET_FRAMES) {
-          lastMatchIdRef.current = null;
-          candidateIdRef.current = null;
-          candidateCountRef.current = 0;
-        }
         return null;
       }
 
-      noCardCountRef.current = 0;
       const bestDetection = detections[0];
 
       // Step 2: Ensure portrait orientation
       let crop = bestDetection.cropCanvas;
       crop = ensurePortrait(crop);
 
-      // Step 3: Match using color grid + cosine similarity
+      // Step 3: Match using card matcher
       const matchResult = identifyCard(crop, matcher);
 
       if (!matchResult || matchResult.similarity < SIMILARITY_THRESHOLD) {
@@ -201,30 +128,9 @@ export function useCardDetection({ enabled = false }) {
         return null;
       }
 
-      // Step 4: Deduplication
-      const matchId = matchResult.card.id;
-      if (matchId === lastMatchIdRef.current) {
-        return null;
-      }
-
-      // Step 5: Stability check
-      if (matchId === candidateIdRef.current) {
-        candidateCountRef.current++;
-      } else {
-        candidateIdRef.current = matchId;
-        candidateCountRef.current = 1;
-      }
-      if (candidateCountRef.current < STABILITY_FRAMES) {
-        return null;
-      }
-
-      // Step 6: Resolve full card data
+      // Step 4: Resolve full card data
       const cardData = resolveCardData(matchResult.card);
       if (!cardData) return null;
-
-      lastMatchIdRef.current = matchId;
-      candidateIdRef.current = null;
-      candidateCountRef.current = 0;
 
       const result = {
         cardData,
@@ -240,99 +146,16 @@ export function useCardDetection({ enabled = false }) {
     } catch (error) {
       console.error('[Detection] Frame processing error:', error);
       return null;
+    } finally {
+      setIsProcessing(false);
     }
-  }, []);
-
-  /**
-   * Start continuous scanning loop
-   */
-  const startScanning = useCallback((captureFrame, onCardDetected) => {
-    if (scanLoopRef.current) return;
-
-    captureFrameRef.current = captureFrame;
-    onCardDetectedRef.current = onCardDetected;
-    setIsScanning(true);
-
-    const scanLoop = async () => {
-      if (!enabledRef.current) {
-        scanLoopRef.current = setTimeout(scanLoop, SCAN_INTERVAL);
-        return;
-      }
-
-      const frame = captureFrameRef.current?.();
-      if (frame) {
-        const result = await processFrame(frame);
-        if (result && result.matched) {
-          onCardDetectedRef.current?.(result);
-        }
-      }
-
-      // Update FPS counter
-      frameCountRef.current++;
-      const now = Date.now();
-      const elapsed = now - fpsTimerRef.current;
-      if (elapsed >= 1000) {
-        setFps(Math.round((frameCountRef.current * 1000) / elapsed));
-        frameCountRef.current = 0;
-        fpsTimerRef.current = now;
-      }
-
-      scanLoopRef.current = setTimeout(scanLoop, SCAN_INTERVAL);
-    };
-
-    scanLoop();
-  }, [processFrame]);
-
-  /**
-   * Stop scanning loop
-   */
-  const stopScanning = useCallback(() => {
-    if (scanLoopRef.current) {
-      clearTimeout(scanLoopRef.current);
-      scanLoopRef.current = null;
-    }
-    setIsScanning(false);
-    setLastDetection(null);
-  }, []);
-
-  /**
-   * Reset match cooldown (allows re-scanning the same card)
-   */
-  const resetCooldown = useCallback(() => {
-    lastMatchIdRef.current = null;
-    candidateIdRef.current = null;
-    candidateCountRef.current = 0;
-    noCardCountRef.current = 0;
-    setLastDetection(null);
-  }, []);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (scanLoopRef.current) {
-        clearTimeout(scanLoopRef.current);
-      }
-    };
-  }, []);
-
-  /**
-   * Update stored callbacks (call when handlers change)
-   */
-  const updateCallbacks = useCallback((captureFrame, onCardDetected) => {
-    if (captureFrame) captureFrameRef.current = captureFrame;
-    if (onCardDetected) onCardDetectedRef.current = onCardDetected;
-  }, []);
+  }, [isProcessing]);
 
   return {
     detectorState,
-    isScanning,
+    isProcessing,
     lastDetection,
-    fps,
     initDetector,
-    processFrame,
-    startScanning,
-    stopScanning,
-    resetCooldown,
-    updateCallbacks,
+    detectSingleFrame,
   };
 }

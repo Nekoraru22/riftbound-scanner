@@ -1,42 +1,38 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Camera, CameraOff, RotateCw, Zap, ZapOff, Play, Pause, AlertCircle } from 'lucide-react';
+import { Camera, CameraOff, RotateCw, Zap, ZapOff, AlertCircle, ScanLine } from 'lucide-react';
 
 export default function ScannerCamera({
   videoRef,
   isActive,
   error,
-  isScanning,
+  isProcessing,
   lastDetection,
-  fps,
   onStartCamera,
   onStopCamera,
   onToggleFacing,
-  onToggleScanning,
-  scanEnabled,
+  onSnapScan,
   detectorState,
   hasTorch,
   torchOn,
   onToggleTorch,
 }) {
   const [dimensions, setDimensions] = useState({ w: 0, h: 0 });
-  const [showToggleIcon, setShowToggleIcon] = useState(false);
-  const [toggleIconType, setToggleIconType] = useState('play'); // 'play' | 'pause'
-  const toggleTimeoutRef = useRef(null);
+  const [showDetection, setShowDetection] = useState(false);
+  const detectionTimerRef = useRef(null);
 
-  const handleTapCamera = () => {
-    // Show the icon briefly
-    setToggleIconType(scanEnabled ? 'play' : 'pause'); // shows what it's switching TO
-    setShowToggleIcon(true);
-    if (toggleTimeoutRef.current) clearTimeout(toggleTimeoutRef.current);
-    toggleTimeoutRef.current = setTimeout(() => setShowToggleIcon(false), 600);
-    onToggleScanning();
-  };
-
+  // Show detection state for 3 seconds then auto-clear
   useEffect(() => {
+    if (lastDetection?.matched) {
+      setShowDetection(true);
+      if (detectionTimerRef.current) clearTimeout(detectionTimerRef.current);
+      detectionTimerRef.current = setTimeout(() => setShowDetection(false), 3000);
+    } else {
+      setShowDetection(false);
+    }
     return () => {
-      if (toggleTimeoutRef.current) clearTimeout(toggleTimeoutRef.current);
+      if (detectionTimerRef.current) clearTimeout(detectionTimerRef.current);
     };
-  }, []);
+  }, [lastDetection]);
 
   useEffect(() => {
     if (!videoRef.current) return;
@@ -63,7 +59,7 @@ export default function ScannerCamera({
   const guideX = (dimensions.w - guideW) / 2;
   const guideY = (dimensions.h - guideH) / 2;
 
-  const hasDetection = lastDetection?.matched;
+  const hasDetection = showDetection;
   const isReady = detectorState === 'ready';
 
   return (
@@ -77,76 +73,69 @@ export default function ScannerCamera({
         autoPlay
       />
 
-      {/* Tap to toggle scanning */}
+      {/* Tap to scan */}
       {isActive && (
-        <div className="absolute inset-0" onClick={handleTapCamera}>
+        <div className="absolute inset-0" onClick={isProcessing ? undefined : onSnapScan}>
           <div className="absolute inset-0 bg-black/40" />
 
-          {/* Centered play/pause indicator (YouTube-style) */}
-          {showToggleIcon && (
+          {/* Processing indicator */}
+          {isProcessing && (
             <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
-              <div className="w-16 h-16 rounded-full bg-black/60 backdrop-blur-sm flex items-center justify-center animate-[fadeOut_0.6s_ease-out_forwards]">
-                {toggleIconType === 'pause' ? (
-                  <Pause className="w-8 h-8 text-white" />
-                ) : (
-                  <Play className="w-8 h-8 text-white ml-1" />
-                )}
+              <div className="px-5 py-2.5 rounded-full bg-black/60 backdrop-blur-sm flex items-center gap-2">
+                <ScanLine className="w-4 h-4 text-gold-400 animate-pulse" />
+                <span className="text-sm font-medium text-gold-400">Scanning...</span>
               </div>
             </div>
           )}
 
           {/* Clear guide area */}
           <div
-            className="absolute bg-transparent"
+            className={`absolute rounded-xl border-2 transition-colors duration-300 ${
+              hasDetection
+                ? 'border-green-400 shadow-lg shadow-green-400/30'
+                : isProcessing
+                  ? 'guide-border border-gold-400/50'
+                  : 'border-rift-400/30'
+            }`}
             style={{
               left: guideX,
               top: guideY,
               width: guideW,
               height: guideH,
-              boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.4)',
+              boxShadow: hasDetection
+                ? '0 0 0 9999px rgba(0, 0, 0, 0.4), 0 10px 15px -3px rgba(74, 222, 128, 0.3)'
+                : '0 0 0 9999px rgba(0, 0, 0, 0.4)',
             }}
           >
-            {/* Guide border */}
-            <div className={`absolute inset-0 border-2 rounded-xl transition-colors duration-300 ${
-              hasDetection
-                ? 'border-green-400 shadow-lg shadow-green-400/30'
-                : scanEnabled
-                  ? 'guide-border border-gold-400/50'
-                  : 'border-rift-400/40'
-            }`}>
-              {/* Corner accents */}
-              {[
-                'top-0 left-0 border-t-2 border-l-2 rounded-tl-xl',
-                'top-0 right-0 border-t-2 border-r-2 rounded-tr-xl',
-                'bottom-0 left-0 border-b-2 border-l-2 rounded-bl-xl',
-                'bottom-0 right-0 border-b-2 border-r-2 rounded-br-xl',
-              ].map((pos, i) => (
-                <div
-                  key={i}
-                  className={`absolute w-7 h-7 ${pos} ${
-                    hasDetection ? 'border-green-400' : 'border-gold-400'
-                  }`}
-                />
-              ))}
+            {/* Corner accents */}
+            {[
+              'top-0 left-0 border-t-2 border-l-2 rounded-tl-xl',
+              'top-0 right-0 border-t-2 border-r-2 rounded-tr-xl',
+              'bottom-0 left-0 border-b-2 border-l-2 rounded-bl-xl',
+              'bottom-0 right-0 border-b-2 border-r-2 rounded-br-xl',
+            ].map((pos, i) => (
+              <div
+                key={i}
+                className={`absolute w-7 h-7 transition-opacity duration-300 ${pos} ${
+                  hasDetection ? 'border-green-400 opacity-0' : 'border-gold-400 opacity-100'
+                }`}
+              />
+            ))}
+          </div>
 
-              {/* Scan line animation */}
-              {scanEnabled && isScanning && !hasDetection && (
-                <div className="absolute left-1 right-1 h-0.5 bg-gradient-to-r from-transparent via-gold-400 to-transparent scan-line opacity-60" />
-              )}
-            </div>
-
-            {/* Detection indicator */}
-            {hasDetection && (
-              <div className="absolute -bottom-9 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-green-500/90 backdrop-blur-sm fade-in">
+          {/* Detection indicator — centered on screen */}
+          {hasDetection && (
+            <div className="absolute left-0 right-0 flex justify-center fade-in" style={{ top: guideY + guideH + 12 }}>
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-green-500/90 backdrop-blur-sm">
                 <Zap className="w-3 h-3 text-white" />
                 <span className="text-xs font-semibold text-white whitespace-nowrap">
                   Card detected
                 </span>
               </div>
-            )}
-          </div>
+            </div>
+          )}
 
-          {/* Status chips — positioned below the mode switcher + slider overlay */}
+          {/* Status chips */}
           <div className="absolute top-24 left-3 flex flex-col gap-2">
             {/* Detector status */}
             <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-black/50 backdrop-blur-sm">
@@ -162,23 +151,13 @@ export default function ScannerCamera({
                  detectorState === 'error' ? 'Error' : 'Inactive'}
               </span>
             </div>
-
-            {/* FPS counter */}
-            {scanEnabled && isScanning && (
-              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-black/50 backdrop-blur-sm">
-                <div className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
-                <span className="text-[10px] font-mono text-white/80">
-                  {fps > 0 ? `${fps} FPS` : 'SCAN'}
-                </span>
-              </div>
-            )}
           </div>
 
           {/* Instructions */}
-          {!hasDetection && scanEnabled && (
+          {!hasDetection && !isProcessing && (
             <div className="absolute bottom-20 left-4 right-4 text-center">
               <p className="text-xs text-white/50 font-body">
-                Place the card inside the frame
+                Tap to scan card
               </p>
             </div>
           )}
@@ -196,7 +175,7 @@ export default function ScannerCamera({
               Camera disabled
             </p>
             <p className="text-sm text-rift-500">
-              Enable the camera to scan cards in real-time
+              Enable the camera to scan cards
             </p>
           </div>
           <button onClick={onStartCamera} className="btn-primary text-sm mt-1 px-6 py-3 rounded-xl">

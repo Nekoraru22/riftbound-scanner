@@ -45,7 +45,6 @@ export default function App() {
   const [loadStage, setLoadStage] = useState('db');
 
   // Scanning
-  const [scanEnabled, setScanEnabled] = useState(true);
   const [pendingCards, setPendingCards] = useState(() =>
     loadFromStorage(STORAGE_KEYS.PENDING_CARDS, [])
   );
@@ -76,10 +75,7 @@ export default function App() {
 
   // ─── Hooks ─────────────────────────────────────────────────
   const camera = useCamera();
-
-  const detection = useCardDetection({
-    enabled: scanEnabled && camera.isActive && activeTab === 'scan',
-  });
+  const detection = useCardDetection();
 
   // ─── Notifications ─────────────────────────────────────────
   const notificationTimeoutRef = useRef(null);
@@ -139,7 +135,6 @@ export default function App() {
   }, [isLoading, scannedCards.length, pendingCards.length, showNotification]);
 
   // ─── State persistence ───────────────────────────────────
-  // Save state to localStorage whenever it changes
   useEffect(() => {
     saveToStorage(STORAGE_KEYS.SCANNED_CARDS, scannedCards);
   }, [scannedCards]);
@@ -156,7 +151,7 @@ export default function App() {
     saveToStorage(STORAGE_KEYS.MODEL_PREFERENCE, modelPreference);
   }, [modelPreference]);
 
-  // Force save on page visibility change (mobile camera returns trigger this)
+  // Force save on page visibility change
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
@@ -192,7 +187,6 @@ export default function App() {
   useEffect(() => { minConfidenceRef.current = minConfidence; }, [minConfidence]);
 
   // ─── Card Detection Handler ────────────────────────────────
-  // Scanned cards go to pendingCards first (not directly to export list)
   const handleCardDetected = useCallback((result) => {
     const { cardData, confidence, similarity, timestamp } = result;
 
@@ -229,6 +223,18 @@ export default function App() {
       navigator.vibrate(50);
     }
   }, [showNotification]);
+
+  // ─── Snap Scan (tap to capture single frame) ──────────────
+  const handleSnapScan = useCallback(async () => {
+    if (!camera.isActive || detection.isProcessing) return;
+
+    const result = await detection.detectSingleFrame(camera.captureFrame);
+    if (result && result.matched) {
+      handleCardDetected(result);
+    } else {
+      showNotification('No card detected — try again', 'info');
+    }
+  }, [camera.isActive, camera.captureFrame, detection, handleCardDetected, showNotification]);
 
   // ─── Pending → Export list handlers ──────────────────────────
   const handleConfirmPending = useCallback((index) => {
@@ -285,23 +291,7 @@ export default function App() {
 
   const handleClearPending = useCallback(() => {
     setPendingCards([]);
-    detection.resetCooldown();
   }, []);
-
-  // ─── Start scanning when camera is active ──────────────────
-  useEffect(() => {
-    if (camera.isActive && detection.detectorState === 'ready' && activeTab === 'scan') {
-      detection.startScanning(camera.captureFrame, handleCardDetected);
-    }
-    return () => {
-      detection.stopScanning();
-    };
-  }, [camera.isActive, detection.detectorState, activeTab]);
-
-  // Keep scan loop callbacks up-to-date
-  useEffect(() => {
-    detection.updateCallbacks(camera.captureFrame, handleCardDetected);
-  }, [camera.captureFrame, handleCardDetected]);
 
   // ─── Card Management ───────────────────────────────────────
   const handleUpdateCard = useCallback((index, updatedCard) => {
@@ -319,9 +309,8 @@ export default function App() {
   const handleClearAll = useCallback(() => {
     if (scannedCards.length === 0) return;
     if (!confirm('Delete all cards from export list?')) return;
-    detection.resetCooldown();
     setScannedCards([]);
-  }, [scannedCards.length, detection]);
+  }, [scannedCards.length]);
 
   // Add a single card to export list (from individual add button)
   const handleAddCardToExport = useCallback((cardData) => {
@@ -350,7 +339,7 @@ export default function App() {
     showNotification(`+ ${cardData.name}`, 'success');
   }, [showNotification]);
 
-  // Add multiple cards to export list at once (from IdentifyTab bulk add)
+  // Add multiple cards to export list at once
   const handleAddCardsToExport = useCallback((cardDataArray) => {
     setScannedCards(prev => {
       let updated = [...prev];
@@ -393,17 +382,6 @@ export default function App() {
     }
   }, [scannedCards, showNotification]);
 
-  // ─── Toggle scanning ──────────────────────────────────────
-  const toggleScanning = useCallback(() => {
-    setScanEnabled(prev => {
-      if (prev) {
-        // Pausing — clear detection state
-        detection.resetCooldown();
-      }
-      return !prev;
-    });
-  }, [detection]);
-
   // ─── Render ────────────────────────────────────────────────
   if (isLoading) {
     return <LoadingScreen progress={loadProgress} stage={loadStage} />;
@@ -417,8 +395,7 @@ export default function App() {
           <ScanTab
             camera={camera}
             detection={detection}
-            scanEnabled={scanEnabled}
-            onToggleScanning={toggleScanning}
+            onSnapScan={handleSnapScan}
             pendingCards={pendingCards}
             onConfirmPending={handleConfirmPending}
             onConfirmAllPending={handleConfirmAllPending}

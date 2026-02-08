@@ -205,8 +205,7 @@ function pendingToDetection(card) {
 export default function ScanTab({
   camera,
   detection,
-  scanEnabled,
-  onToggleScanning,
+  onSnapScan,
   pendingCards,
   onConfirmPending,
   onConfirmAllPending,
@@ -264,11 +263,13 @@ export default function ScanTab({
     setCheckedPendingIndices(new Set());
   }, [checkedPendingIndices, onConfirmPending]);
 
-  // Stop camera when switching to upload mode
+  // Clean switch between modes
   const handleModeChange = useCallback((mode) => {
+    const wasActive = camera.isActive;
+    camera.stopCamera();
     setScanMode(mode);
-    if (mode === 'upload' && camera.isActive) {
-      camera.stopCamera();
+    if (mode === 'camera' && wasActive) {
+      camera.startCamera();
     }
   }, [camera]);
 
@@ -490,10 +491,10 @@ export default function ScanTab({
   // --- Mode switcher ---
 
   const modeSwitcher = (
-    <div className="flex gap-1 p-1 rounded-xl bg-rift-800/80 backdrop-blur-md border border-rift-600/30 w-fit">
+    <div className="flex gap-1 p-1 rounded-xl bg-rift-800/80 backdrop-blur-md border border-rift-600/30 w-fit flex-shrink-0">
       <button
         onClick={() => handleModeChange('camera')}
-        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
           scanMode === 'camera'
             ? 'bg-gold-400/20 text-gold-400 border border-gold-400/30'
             : 'text-rift-400 hover:text-rift-200 border border-transparent'
@@ -504,7 +505,7 @@ export default function ScanTab({
       </button>
       <button
         onClick={() => handleModeChange('upload')}
-        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
           scanMode === 'upload'
             ? 'bg-gold-400/20 text-gold-400 border border-gold-400/30'
             : 'text-rift-400 hover:text-rift-200 border border-transparent'
@@ -521,21 +522,19 @@ export default function ScanTab({
   // ═══════════════════════════════════════════
   if (scanMode === 'camera') {
     return (
-      <div className="flex-1 relative overflow-hidden lg:flex lg:flex-row">
+      <div key="camera" className="flex-1 relative overflow-hidden lg:flex lg:flex-row">
         {/* Camera area */}
         <div className="absolute inset-0 lg:relative lg:flex-1">
           <ScannerCamera
             videoRef={camera.videoRef}
             isActive={camera.isActive}
             error={camera.error}
-            isScanning={detection.isScanning}
+            isProcessing={detection.isProcessing}
             lastDetection={detection.lastDetection}
-            fps={detection.fps}
             onStartCamera={camera.startCamera}
             onStopCamera={camera.stopCamera}
             onToggleFacing={camera.toggleFacing}
-            onToggleScanning={onToggleScanning}
-            scanEnabled={scanEnabled}
+            onSnapScan={onSnapScan}
             detectorState={detection.detectorState}
             hasTorch={camera.hasTorch}
             torchOn={camera.torchOn}
@@ -572,7 +571,7 @@ export default function ScanTab({
         {/* ── Pending cards: mobile bottom overlay ── */}
         {pendingCards.length > 0 && (
           <div
-            className="absolute bottom-0 left-0 right-0 z-30 bg-rift-800/95 backdrop-blur-xl border-t border-rift-600/30 rounded-t-2xl transition-all duration-300 ease-out flex flex-col lg:hidden"
+            className="absolute bottom-0 left-0 right-0 z-30 bg-rift-800/95 backdrop-blur-xl border-t border-rift-600/30 rounded-t-2xl transition-[height] duration-300 ease-out flex flex-col lg:hidden"
             style={{ height: sheetExpanded ? '50dvh' : 56 }}
           >
             <button
@@ -706,13 +705,16 @@ export default function ScanTab({
   );
 
   return (
-    <div className="flex-1 relative overflow-hidden lg:flex lg:flex-row">
+    <div key="upload" className="flex-1 relative overflow-hidden lg:flex lg:flex-row">
+      {/* Left column: upload + canvas + mobile results */}
+      {/* Mode switcher - absolutely positioned to match camera mode */}
+      <div className="absolute top-3 left-3 z-10">
+        {modeSwitcher}
+      </div>
+
       {/* Left column: upload + canvas + mobile results */}
       <div className={`h-full overflow-y-auto pb-4 lg:flex-1 lg:min-w-0 ${!uploadedImage ? 'flex flex-col' : ''}`}>
-        <div className={`px-4 pt-4 pb-4 space-y-4 ${!uploadedImage ? 'flex-1 flex flex-col' : ''}`}>
-          {/* Mode switcher */}
-          {modeSwitcher}
-
+        <div className={`px-4 pt-14 pb-4 space-y-4 ${!uploadedImage ? 'flex-1 flex flex-col' : ''}`}>
           {/* Upload area or canvas */}
           {!uploadedImage ? (
             <div className="flex-1 flex items-center justify-center">
