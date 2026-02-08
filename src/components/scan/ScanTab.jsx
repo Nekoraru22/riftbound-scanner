@@ -7,15 +7,46 @@ import DetectionCanvas, { DETECTION_COLORS } from '../identify/DetectionCanvas.j
 import CardDetailPanel from '../identify/CardDetailPanel.jsx';
 import { getDetector } from '../../lib/yoloDetector.js';
 import { getMatcher } from '../../lib/cardMatcher.js';
+import { dctFeaturesFromCanvas } from '../../lib/phash.js';
 import { downloadCSV, validateForExport } from '../../lib/csvExporter.js';
 
 // --- Card matching utilities ---
 
+function equalizeHistogram(data) {
+  for (let ch = 0; ch < 3; ch++) {
+    const hist = new Uint32Array(256);
+    for (let i = ch; i < data.length; i += 4) hist[data[i]]++;
+    const cdf = new Uint32Array(256);
+    cdf[0] = hist[0];
+    for (let i = 1; i < 256; i++) cdf[i] = cdf[i - 1] + hist[i];
+    let cdfMin = 0;
+    for (let i = 0; i < 256; i++) { if (cdf[i] > 0) { cdfMin = cdf[i]; break; } }
+    const denom = data.length / 4 - cdfMin;
+    if (denom > 0) {
+      for (let i = ch; i < data.length; i += 4) {
+        data[i] = ((cdf[data[i]] - cdfMin) * 255 / denom + 0.5) | 0;
+      }
+    }
+  }
+}
+
 function computeColorGrid(canvas, gridSize) {
+  // Equalize at full resolution first (matches Python pipeline)
+  const w = canvas.width, h = canvas.height;
+  const eq = document.createElement('canvas');
+  eq.width = w;
+  eq.height = h;
+  const eqCtx = eq.getContext('2d');
+  eqCtx.drawImage(canvas, 0, 0);
+  const fullData = eqCtx.getImageData(0, 0, w, h);
+  equalizeHistogram(fullData.data);
+  eqCtx.putImageData(fullData, 0, 0);
+
+  // Resize equalized image to grid
   const tmp = document.createElement('canvas');
   tmp.width = gridSize;
   tmp.height = gridSize;
-  tmp.getContext('2d').drawImage(canvas, 0, 0, gridSize, gridSize);
+  tmp.getContext('2d').drawImage(eq, 0, 0, gridSize, gridSize);
   const data = tmp.getContext('2d').getImageData(0, 0, gridSize, gridSize).data;
   const features = new Float32Array(gridSize * gridSize * 3);
   for (let i = 0, j = 0; i < data.length; i += 4) {
@@ -85,42 +116,93 @@ function cropRotated(img, cx, cy, w, h, angle) {
   return c;
 }
 
+const TOP_N = 20;
+const COLOR_W = 0.6;
+const DCT_W = 0.4;
+
+// Artwork crop region (portrait card) — excludes frame, name bar, text/stats
+const ART_TOP = 0.05;
+const ART_BOTTOM = 0.55;
+const ART_LEFT = 0.05;
+const ART_RIGHT = 0.95;
+
+function cropArtwork(canvas) {
+  const w = canvas.width, h = canvas.height;
+  const sx = Math.round(w * ART_LEFT);
+  const sy = Math.round(h * ART_TOP);
+  const sw = Math.round(w * (ART_RIGHT - ART_LEFT));
+  const sh = Math.round(h * (ART_BOTTOM - ART_TOP));
+  const c = document.createElement('canvas');
+  c.width = sw;
+  c.height = sh;
+  c.getContext('2d').drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+  return c;
+}
+
 function identifyCard(cropCanvas, matcher) {
   if (!matcher || !matcher.cards || matcher.cards.length === 0) return null;
-  const featNormal = computeColorGrid(cropCanvas, matcher.gridSize);
-  const rotated = rotateCanvas90(cropCanvas);
-  const featRotated = computeColorGrid(rotated, matcher.gridSize);
 
+  // Crop to artwork region (excludes shared frame/text)
+  const art = cropArtwork(cropCanvas);
+  const artRotated = cropArtwork(rotateCanvas90(cropCanvas));
+
+  const featNormal = computeColorGrid(art, matcher.gridSize);
+  const featRotated = computeColorGrid(artRotated, matcher.gridSize);
+
+  // Stage 1: Color grid → rank all cards
   const scores = [];
   for (const c of matcher.cards) {
     const s1 = cosineSimilarity(featNormal, c.f);
     const s2 = cosineSimilarity(featRotated, c.f);
-    scores.push({ card: c, similarity: Math.max(s1, s2) });
+    scores.push({ card: c, colorSim: Math.max(s1, s2) });
   }
-  scores.sort((a, b) => b.similarity - a.similarity);
+  scores.sort((a, b) => b.colorSim - a.colorSim);
+
+  // Stage 2: DCT feature re-ranking of top candidates
+  const candidates = scores.slice(0, TOP_N);
+  const hasDCT = candidates.some(c => c.card.d != null);
+
+  if (hasDCT) {
+    const dctNormal = dctFeaturesFromCanvas(art);
+    const dctRotated = dctFeaturesFromCanvas(artRotated);
+
+    for (const c of candidates) {
+      if (c.card.d) {
+        const s1 = cosineSimilarity(dctNormal, c.card.d);
+        const s2 = cosineSimilarity(dctRotated, c.card.d);
+        c.dctSim = Math.max(s1, s2);
+      } else {
+        c.dctSim = c.colorSim;
+      }
+      c.combined = c.colorSim * COLOR_W + c.dctSim * DCT_W;
+    }
+    candidates.sort((a, b) => b.combined - a.combined);
+  }
+
+  const toCardData = (r) => ({
+    id: r.card.id,
+    name: r.card.name,
+    collectorNumber: String(r.card.number).padStart(3, '0'),
+    code: r.card.code,
+    set: r.card.set,
+    setName: r.card.setName,
+    domain: r.card.domain,
+    domains: r.card.domains,
+    rarity: r.card.rarity,
+    type: r.card.type,
+    energy: r.card.energy,
+    might: r.card.might,
+    tags: r.card.tags,
+    illustrator: r.card.illustrator,
+    text: r.card.text,
+    sim: (r.colorSim * 100).toFixed(1),
+    similarity: r.colorSim,
+  });
 
   return {
-    card: scores[0]?.card || null,
-    similarity: scores[0]?.similarity || 0,
-    top3: scores.slice(0, 3).map(r => ({
-      id: r.card.id,
-      name: r.card.name,
-      collectorNumber: String(r.card.number).padStart(3, '0'),
-      code: r.card.code,
-      set: r.card.set,
-      setName: r.card.setName,
-      domain: r.card.domain,
-      domains: r.card.domains,
-      rarity: r.card.rarity,
-      type: r.card.type,
-      energy: r.card.energy,
-      might: r.card.might,
-      tags: r.card.tags,
-      illustrator: r.card.illustrator,
-      text: r.card.text,
-      sim: (r.similarity * 100).toFixed(1),
-      similarity: r.similarity,
-    })),
+    card: candidates[0]?.card || null,
+    similarity: candidates[0]?.colorSim || 0,
+    top3: candidates.slice(0, 3).map(toCardData),
   };
 }
 
@@ -273,16 +355,19 @@ export default function ScanTab({
     }
   }, [camera]);
 
-  // Scroll to selected detection
+  // Scroll to selected detection (delayed to allow card expansion first)
   useEffect(() => {
     if (selectedDetection == null) return;
-    for (const refs of [desktopDetectionRefs, mobileDetectionRefs]) {
-      const el = refs.current[selectedDetection];
-      if (el && el.offsetParent !== null) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        break;
+    const timer = setTimeout(() => {
+      for (const refs of [desktopDetectionRefs, mobileDetectionRefs]) {
+        const el = refs.current[selectedDetection];
+        if (el && el.offsetParent !== null) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          break;
+        }
       }
-    }
+    }, 150);
+    return () => clearTimeout(timer);
   }, [selectedDetection]);
 
   // --- Upload mode handlers ---

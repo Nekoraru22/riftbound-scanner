@@ -4,28 +4,28 @@ A web application for scanning and cataloging RiftBound TCG cards using AI-power
 
 ## Architecture Overview
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        cards_scraper.py                         │
-├─────────────────────────────────────────────────────────────────┤
-│  1. Fetch gallery HTML                                          │
-│  2. Extract card data from __NEXT_DATA__                        │
-│  3. Normalize and save to SQLite                                │
-│  4. Download + optimize + rotate images (parallel WebP)         │
-│  5. Generate color grid hashes ──────────────────────┐          │
-└──────────────────────────────┬───────────────────────│──────────┘
-                               │                       │
-                               ▼                       ▼
-┌────────────────────────────────────────┐  ┌─────────────────────┐
-│           data_creator.py              │  │   card-hashes.json  │
-├────────────────────────────────────────┤  └──────────┬──────────┘
-│  1. Load card images from SQLite       │             │
-│  2. Generate synthetic backgrounds     │             ▼
-│  3. Place cards with random transforms │  ┌─────────────────────┐
-│  4. Apply augmentation pipeline        │  │ Frontend Card Matcher│
-│  5. Export YOLO OBB dataset            │  │ (cosine similarity) │
-└──────────────────┬─────────────────────┘  └─────────────────────┘
-                   │
+```text
+┌──────────────────────────────────────────────────────────────────┐
+│                        cards_scraper.py                          │
+├──────────────────────────────────────────────────────────────────┤
+│  1. Fetch gallery HTML                                           │
+│  2. Extract card data from __NEXT_DATA__                         │
+│  3. Normalize and save to SQLite                                 │
+│  4. Download + optimize + rotate images (parallel WebP)          │
+│  5. Crop artwork → histogram eq. → color grid + DCT features ──┐ │
+└──────────────────────────────┬─────────────────────────────────│─┘
+                               │                                 │
+                               ▼                                 ▼
+┌────────────────────────────────────────┐  ┌────────────────────────┐
+│           data_creator.py              │  │    card-hashes.json    │
+├────────────────────────────────────────┤  └───────────┬────────────┘
+│  1. Load card images from SQLite       │              │
+│  2. Generate synthetic backgrounds     │              ▼
+│  3. Place cards with random transforms │  ┌────────────────────────┐
+│  4. Apply augmentation pipeline        │  │  Frontend Card Matcher │
+│  5. Export YOLO OBB dataset            │  │  (two-pass: color grid │
+└──────────────────┬─────────────────────┘  │   + DCT re-ranking)    │
+                   │                        └────────────────────────┘
                    ▼
 ┌────────────────────────────────────────┐
 │              train.py                  │
@@ -45,75 +45,81 @@ The scanner uses a **dual-layer approach** to scan cards in real time:
 | Layer | Model | Question it answers | Details |
 |-------|-------|---------------------|---------|
 | **Detection** | YOLO11n-OBB | *Where* is there a card? | Locates cards in the camera frame with oriented bounding boxes (handles any rotation). Single class (`card`), trained on synthetic data. |
-| **Identification** | Color grid + cosine similarity | *Which* card is it? | Crops the detected region, reduces it to an 8×8 color grid, and matches it against stored fingerprints of all ~245 cards. |
+| **Identification** | Color grid + DCT re-ranking | *Which* card is it? | Crops the detected region to the artwork area, computes a 16×16 color grid for fast filtering, then re-ranks the top 20 candidates using DCT frequency features. |
 
-YOLO alone doesn't know which card it's looking at — it only finds rectangular card-shaped objects. The color grid matcher then takes each crop and identifies the specific card by comparing color distributions.
-
-```
-Camera Frame ──► YOLO detects card positions ──► Crop each card ──► 8×8 color grid ──► Cosine similarity ──► Card identified
-                 (bounding box + rotation)        from frame          fingerprint          vs stored hashes      (name, set, rarity)
-```
-
-## Card Color Grid Hashing
-
-The scanner identifies cards using a **color grid fingerprinting** system. This approach is more robust than perceptual hashing for matching noisy camera crops.
-
-### How It Works
-
-Each card image is converted into a compact numerical fingerprint:
+YOLO alone doesn't know which card it's looking at — it only finds rectangular card-shaped objects. The two-pass matcher then takes each crop and identifies the specific card.
 
 ```
-Original Card Image              Color Grid (8x8)           Feature Vector
-┌──────────────────┐            ┌─┬─┬─┬─┬─┬─┬─┬─┐
-│                  │            │ │ │ │ │ │ │ │ │          [0.12, 0.34, 0.56,  ← R,G,B cell 1
-│   Card Artwork   │  ────────► ├─┼─┼─┼─┼─┼─┼─┼─┤           0.23, 0.45, 0.67,  ← R,G,B cell 2
-│                  │  resize    │ │ │ │ │ │ │ │ │           ...
-│                  │  8x8       ├─┼─┼─┼─┼─┼─┼─┼─┤           0.89, 0.12, 0.34]  ← R,G,B cell 64
-│                  │            │ │ │ │ │ │ │ │ │
-└──────────────────┘            └─┴─┴─┴─┴─┴─┴─┴─┘          192 values total
-     744x1039 px                   64 cells                (64 × 3 RGB)
+Camera Frame ──► YOLO detects ──► Crop card ──► Artwork crop ──► Stage 1: 16×16 color grid ──► Stage 2: DCT re-ranking ──► Card identified
+                 card positions    from frame     (illustration     cosine similarity             top 20 candidates          (name, set, rarity)
+                                                   region only)      → top 20 candidates          189-float features
 ```
 
-### Process Steps
+## Card Identification Pipeline
 
-1. **Resize**: The card image is resized to 8×8 pixels using area interpolation
-2. **Color Extraction**: Each pixel's RGB values are normalized to 0-1 range
-3. **Flatten**: The 8×8×3 grid is flattened into a 192-element vector
-4. **Store**: Vectors are saved as JSON for fast frontend loading
+The scanner identifies cards using a **two-pass pipeline** that combines color grid fingerprinting with DCT frequency analysis. Both stages operate only on the **artwork region** of the card, excluding the shared frame, name bar, and text box that are identical across cards.
 
-### Why 8×8 Grid?
+### Artwork Crop
 
-| Grid Size | Features | Precision | Speed | Use Case |
-|-----------|----------|-----------|-------|----------|
-| 4×4       | 48       | Low       | Fastest | Very fast matching, less accurate |
-| **8×8**   | **192**  | **Good**  | **Fast** | **Best balance for card matching** |
-| 16×16     | 768      | High      | Slower | More precision, higher memory |
+Before any feature extraction, the card image is cropped to isolate the illustration:
 
-The 8×8 grid captures enough color distribution to distinguish between cards while remaining compact enough for real-time matching.
+```
+Full Card Image                 Artwork Crop
+┌──────────────────┐           ┌─────────────────┐
+│    Card Name     │  ──5%──►  │                 │
+├──────────────────┤           │   Illustration  │
+│                  │           │     Region      │
+│   Illustration   │           │                 │
+│                  │           │   (where cards  │
+├──────────────────┤  ──55%──► │    actually     │
+│   Card Text      │           │    differ)      │
+│   Stats / Energy │           └─────────────────┘
+└──────────────────┘             5%-95% width
+```
 
-### Card Matching (Frontend)
+This removes ~60% of the card area that is shared across all cards (frame borders, name bar, text box, stats), dramatically improving discrimination between visually similar cards.
 
-When a card is detected by YOLO, the frontend:
+### Stage 1: Color Grid (Fast Filtering)
 
-1. Extracts the card crop from the camera frame
-2. Computes its 8×8 color grid
-3. Calculates **cosine similarity** with all stored card hashes
-4. Returns the best match (and top-3 candidates)
+Each card's artwork is converted into a compact numerical fingerprint:
 
-```javascript
-// Cosine Similarity
-similarity = (A · B) / (||A|| × ||B||)
+```text
+Artwork Crop              Histogram Eq.           16×16 Color Grid         Feature Vector
+┌────────────────┐       ┌────────────────┐      ┌─┬─┬─┬─┬─┬─┬─┬─┐
+│                │       │                │      │ │ │ │ │ │ │ │ │    [0.12, 0.34, 0.56,  ← R,G,B cell 1
+│  Illustration  │ ────► │  Normalized    │ ───► ├─┼─┼─┼─┼─┼─┼─┼─┤     0.23, 0.45, 0.67,  ← R,G,B cell 2
+│                │  eq.  │  Brightness    │      ├─┼─┼─┼─┼─┼─┼─┼─┤     ...
+│                │       │                │      │ │ │ │ │ │ │ │ │     0.89, 0.12, 0.34]  ← R,G,B cell 256
+└────────────────┘       └────────────────┘      └─┴─┴─┴─┴─┴─┴─┴─┘
+                                                  256 cells             768 values (256 × 3 RGB)
+```
 
-// Values range from -1 to 1
-// > 0.85 = confident match
-// > 0.55 = probable match
+1. **Histogram equalization**: Per-channel brightness normalization so dark photos match well-lit references
+2. **Resize**: Equalized artwork is resized to 16×16 pixels
+3. **Color extraction**: Each pixel's RGB values are normalized to 0-1 range
+4. **Cosine similarity**: Query vector is compared against all stored card vectors
+5. **Top 20 candidates** are passed to Stage 2
+
+### Stage 2: DCT Re-Ranking (Precision)
+
+The top 20 candidates from Stage 1 are re-ranked using **DCT (Discrete Cosine Transform)** low-frequency features, which capture texture and structural patterns beyond just color:
+
+```text
+Artwork Crop ──► Histogram Eq. ──► Resize 32x32 ──► 2D DCT per channel ──► 8x8 low-freq block ──► 189 floats
+                                                       R, G, B                (skip DC)              (63 x 3 channels)
+```
+
+The final score combines both stages:
+
+```text
+combined = colorSimilarity × 0.6 + dctSimilarity × 0.4
 ```
 
 ### Orientation Handling
 
 Cards can be scanned in any rotation. The matcher tests both orientations:
 
-```
+```text
 ┌─────────┐      ┌───────────────┐
 │         │      │               │
 │  Card   │  vs  │     Card      │  (rotated 90°)
@@ -128,12 +134,15 @@ Best similarity from both is used
 
 ```bash
 cd model
-python cards_scraper.py
+python cards_scraper.py              # Full pipeline (fetch + download + hashes)
+python cards_scraper.py --only-hashes # Regenerate hashes only (skip fetch/download)
 ```
+
+The `--only-hashes` flag is useful after tweaking feature extraction parameters — it skips the gallery fetch and image download, and only regenerates `card-hashes.json` from existing images.
 
 ### Pipeline Output
 
-```
+```text
 Downloading gallery...
 Cards found: 664
 Cards in database: 664
@@ -150,7 +159,7 @@ Scraping complete!
 |------|-------------|
 | `model/riftbound.db` | SQLite database with card metadata |
 | `public/cards/*.webp` | Optimized card images (WebP format) |
-| `public/card-hashes.json` | Color grid hashes for frontend matching |
+| `public/card-hashes.json` | Color grid (768 floats) + DCT features (189 floats) per card |
 
 ## Synthetic Dataset Generation
 
@@ -180,9 +189,9 @@ Background Generation          Card Placement              Global Augmentations
 │ - Real texture    │        │ - Overlap avoid  │        │ - Gaussian noise   │
 │ + Lighting grad.  │        │ - 1-5 cards      │        │ - Motion blur      │
 │ + Distractors     │        └──────────────────┘        │ - JPEG artifacts   │
-└───────────────────┘                                     │ - Vignette         │
-                                                          │ - Cutout           │
-                                                          └────────────────────┘
+└───────────────────┘                                    │ - Vignette         │
+                                                         │ - Cutout           │
+                                                         └────────────────────┘
 ```
 
 Additionally, ~25% of training images use **mosaic augmentation** (YOLOv4+ style), which splits the image into 4 quadrants with independent scenes.
@@ -351,10 +360,10 @@ The detector uses ONNX as the primary format and falls back to TensorFlow.js for
 
 ## Project Structure
 
-```
+```text
 riftbound-scanner-src/
 ├── model/
-│   ├── cards_scraper.py    # Scraper + hash generator
+│   ├── cards_scraper.py    # Scraper + hash generator (artwork crop + histogram eq.)
 │   ├── data_creator.py     # Synthetic dataset generator
 │   ├── train.py            # Cloud training on Modal
 │   ├── riftbound.db        # SQLite database
@@ -363,21 +372,22 @@ riftbound-scanner-src/
 │   └── distractors/        # (optional) Non-card PNG objects
 ├── public/
 │   ├── cards/              # Optimized card images (WebP)
-│   ├── card-hashes.json    # Color grid hashes
+│   ├── card-hashes.json    # Color grid + DCT feature hashes
 │   └── models/             # YOLO models (TF.js, ONNX, ONNX-int8)
 └── src/
     └── lib/
-        ├── cardMatcher.js  # Frontend matching logic
+        ├── cardMatcher.js  # Two-pass matching (color grid + DCT re-ranking)
+        ├── phash.js        # DCT feature extraction + histogram equalization
         └── cardDatabase.js # IndexedDB interface
 ```
 
 ## Fun Fact: Photoshopped Card Images
 
-The card identification system relies on an 8x8 pixel color grid and cosine similarity — not text recognition or detailed features. This means Photoshop-modified card images (e.g., custom cards, artistic alters, or humorous edits) could also be recognized by the system, as long as the overall color distribution remains close enough to the original card. If the general color composition is preserved (background, borders, dominant palette), the system may still identify it as the original card. The more the color distribution is altered, the lower the cosine similarity will be, making it more likely to go unrecognized or be confused with a different card.
+The card identification system relies on a 16x16 pixel color grid and DCT frequency features extracted from the artwork region — not text recognition or detailed features. This means Photoshop-modified card images (e.g., custom cards, artistic alters, or humorous edits) could also be recognized by the system, as long as the artwork's overall color distribution and texture remain close enough to the original card. The more the illustration is altered, the lower the similarity will be, making it more likely to go unrecognized or be confused with a different card.
 
 ## Example with picture
 <img width="2518" height="1288" alt="Sin título-1" src="https://github.com/user-attachments/assets/941b189b-494d-4756-baf0-63f694dd50cc" />
 
 ## TODO
 - [ ] Investigate how the model detects the position of the cards for the validation phase, maybe more parameters like deformation can be extracted to improve the accuracy of the model
-- [ ] Improve live scanner
+- [ ] Improve hash generation (maybe small CNN on artwork crop - MobileNetV3-Small)

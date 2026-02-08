@@ -22,7 +22,15 @@ CARDS_DIR = os.path.join(PUBLIC_DIR, "cards")
 HASHES_PATH = os.path.join(PUBLIC_DIR, "card-hashes.json")
 GALLERY_URL = "https://riftbound.leagueoflegends.com/en-us/card-gallery/"
 
-GRID_SIZE = 8 # 8x8 grid = 192 features (64 cells * 3 RGB channels)
+GRID_SIZE = 16 # 16x16 grid = 768 features (256 cells * 3 RGB channels)
+DCT_SIZE = 32 # 32x32 resize for DCT feature extraction
+DCT_BLOCK = 8 # 8x8 low-frequency block → 63 coefficients per channel
+
+# Artwork crop region (portrait card) — excludes frame, name bar, text/stats
+ART_TOP = 0.05
+ART_BOTTOM = 0.55
+ART_LEFT = 0.05
+ART_RIGHT = 0.95
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -408,6 +416,82 @@ def download_images(cards: list[dict]) -> None:
     print(f"Download complete. Total: {len(cards_to_download)}, Failed: {failed}")
 
 
+def _crop_artwork(image: np.ndarray) -> np.ndarray:
+    """
+    Crop to the artwork region of a portrait card image.
+
+    Excludes the shared frame, name bar, text box and stats so that
+    features are computed only on the discriminative illustration.
+
+    Arguments:
+        image: BGR image (from cv2.imread), assumed portrait orientation.
+
+    Returns:
+        Cropped BGR image containing only the artwork region.
+    """
+    h, w = image.shape[:2]
+    sy = round(h * ART_TOP)
+    ey = round(h * ART_BOTTOM)
+    sx = round(w * ART_LEFT)
+    ex = round(w * ART_RIGHT)
+    return image[sy:ey, sx:ex].copy()
+
+
+def _equalize_histogram(image: np.ndarray) -> np.ndarray:
+    """
+    Per-channel histogram equalization matching the JS equalizeHistogram().
+
+    Normalizes brightness so that reference images and dark query photos
+    produce comparable features.
+
+    Arguments:
+        image: BGR image (from cv2.imread).
+
+    Returns:
+        Equalized BGR image.
+    """
+    result = image.copy()
+    for ch in range(3):
+        result[:, :, ch] = cv2.equalizeHist(result[:, :, ch])
+    return result
+
+
+def _compute_dct_features(image: np.ndarray) -> list[float]:
+    """
+    Compute DCT low-frequency feature vector (189 floats) matching phash.js.
+
+    Uses an unnormalized DCT-II (same as phash.js) to ensure cosine similarity
+    between Python-generated DB features and JS-generated query features is valid.
+
+    Arguments:
+        image: BGR image (from cv2.imread).
+
+    Returns:
+        List of 189 floats (63 coefficients per R/G/B channel).
+    """
+    eq = _equalize_histogram(image)
+    small = cv2.resize(eq, (DCT_SIZE, DCT_SIZE), interpolation=cv2.INTER_AREA)
+    small_rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB).astype(np.float64)
+
+    # DCT-II matrix without normalization (matches phash.js manual DCT)
+    n = np.arange(DCT_SIZE)
+    C = np.cos(np.pi / DCT_SIZE * np.outer(n, n + 0.5))
+
+    features = []
+    for ch in range(3):  # R, G, B
+        channel = small_rgb[:, :, ch]
+        dct = C @ channel @ C.T
+
+        # Extract 8x8 low-frequency block, skip DC at (0,0)
+        for row in range(DCT_BLOCK):
+            for col in range(DCT_BLOCK):
+                if row == 0 and col == 0:
+                    continue
+                features.append(round(float(dct[row, col]), 4))
+
+    return features
+
+
 def _compute_color_grid(image: np.ndarray, grid_size: int = GRID_SIZE) -> list[float]:
     """
     Resizes an image to a grid and returns flattened normalized RGB values.
@@ -419,7 +503,8 @@ def _compute_color_grid(image: np.ndarray, grid_size: int = GRID_SIZE) -> list[f
     Returns:
         A list of normalized RGB values (0-1) for each grid cell.
     """
-    small = cv2.resize(image, (grid_size, grid_size), interpolation=cv2.INTER_AREA)
+    eq = _equalize_histogram(image)
+    small = cv2.resize(eq, (grid_size, grid_size), interpolation=cv2.INTER_AREA)
     small = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
     features = small.astype(np.float32).flatten() / 255.0
     return [round(float(v), 4) for v in features]
@@ -454,7 +539,9 @@ def generate_card_hashes() -> None:
             skipped += 1
             continue
 
-        features = _compute_color_grid(img)
+        art = _crop_artwork(img)
+        features = _compute_color_grid(art)
+        dct_features = _compute_dct_features(art)
 
         # Parse domains JSON array → take first domain (primary)
         domains_raw = row["domains"] or "[]"
@@ -490,6 +577,7 @@ def generate_card_hashes() -> None:
             "orientation": row["orientation"],
             "imageUrl": row["image_url"],
             "f": features,
+            "d": dct_features,
         })
 
     cards.sort(key=lambda c: (c["set"], c["number"]))
@@ -502,8 +590,12 @@ def generate_card_hashes() -> None:
 
 
 def main():
-    # Get arguments
     args = sys.argv[1:]
+
+    if args and args[0] == "--only-hashes":
+        generate_card_hashes()
+        print("Done.")
+        return
 
     # Fetch and parse gallery
     html = fetch_gallery_html()
@@ -525,13 +617,10 @@ def main():
     print(f"Cards in database: {total}")
     conn.close()
 
-    if args and args[0] == "--skip-download":
-        print("Skipping image download.")
-    else:
-        # Download, optimize, and rotate images in one step
-        download_images(cards)
+    # Download, optimize, and rotate images
+    download_images(cards)
 
-    # Generate color grid hashes for card matching
+    # Generate hashes for card matching
     generate_card_hashes()
 
     print("Scraping complete!")

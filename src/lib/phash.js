@@ -109,6 +109,34 @@ function extractHash(dctResult) {
 }
 
 /**
+ * Per-channel histogram equalization on RGBA pixel data (in-place).
+ * Normalizes brightness so dark photos match well-lit reference images.
+ */
+function equalizeHistogram(data) {
+  for (let ch = 0; ch < 3; ch++) {
+    const hist = new Uint32Array(256);
+    for (let i = ch; i < data.length; i += 4) hist[data[i]]++;
+
+    const cdf = new Uint32Array(256);
+    cdf[0] = hist[0];
+    for (let i = 1; i < 256; i++) cdf[i] = cdf[i - 1] + hist[i];
+
+    let cdfMin = 0;
+    for (let i = 0; i < 256; i++) {
+      if (cdf[i] > 0) { cdfMin = cdf[i]; break; }
+    }
+
+    const totalPixels = data.length / 4;
+    const denom = totalPixels - cdfMin;
+    if (denom > 0) {
+      for (let i = ch; i < data.length; i += 4) {
+        data[i] = ((cdf[data[i]] - cdfMin) * 255 / denom + 0.5) | 0;
+      }
+    }
+  }
+}
+
+/**
  * Resize image data to 32x32 using bilinear interpolation
  * Returns { r, g, b } each as Float64Array of length 1024
  */
@@ -216,6 +244,49 @@ export function findBestMatch(queryHash, referenceHashes, threshold = 6) {
     return { match: bestMatch, distance: bestDistance };
   }
   return { match: null, distance: bestDistance };
+}
+
+/**
+ * Compute DCT low-frequency feature vector from a canvas (189 floats).
+ * 63 coefficients per R/G/B channel (8×8 block minus DC).
+ * Matches the Python _compute_dct_features() exactly.
+ *
+ * @param {HTMLCanvasElement} canvas
+ * @returns {Float32Array} 189-element feature vector
+ */
+export function dctFeaturesFromCanvas(canvas) {
+  const ctx = canvas.getContext('2d');
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  return computeDCTFeatures(imageData.data, canvas.width, canvas.height);
+}
+
+/**
+ * Compute DCT low-frequency feature vector from raw image data.
+ * @param {Uint8ClampedArray} imageData - RGBA pixel data
+ * @param {number} width
+ * @param {number} height
+ * @returns {Float32Array} 189-element feature vector
+ */
+export function computeDCTFeatures(imageData, width, height) {
+  initDCTCoeffs();
+  equalizeHistogram(imageData);
+  const { r, g, b } = resizeAndSplit(imageData, width, height);
+
+  const dctR = dct2d(r);
+  const dctG = dct2d(g);
+  const dctB = dct2d(b);
+
+  const features = new Float32Array(63 * 3);
+  let idx = 0;
+  for (const dct of [dctR, dctG, dctB]) {
+    for (let row = 0; row < HASH_BLOCK; row++) {
+      for (let col = 0; col < HASH_BLOCK; col++) {
+        if (row === 0 && col === 0) continue;
+        features[idx++] = dct[row * DCT_SIZE + col];
+      }
+    }
+  }
+  return features;
 }
 
 /**

@@ -17,7 +17,7 @@ export function useCardDetection() {
   const detectorRef = useRef(null);
 
   // Min cosine similarity for a valid match
-  const SIMILARITY_THRESHOLD = 0.60;
+  const SIMILARITY_THRESHOLD = 0.6;
 
   /**
    * Initialize the YOLO detector
