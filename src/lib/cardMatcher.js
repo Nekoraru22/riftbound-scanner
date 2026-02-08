@@ -8,7 +8,7 @@
 
 import { dctFeaturesFromCanvas } from './phash.js';
 
-const HASHES_URL = '/card-hashes.json';
+const HASHES_URL = `/card-hashes.json?v=${__BUILD_TIME__}`;
 const TOP_N_CANDIDATES = 20;
 const COLOR_WEIGHT = 0.6;
 const DCT_WEIGHT = 0.4;
