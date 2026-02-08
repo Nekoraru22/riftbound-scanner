@@ -196,16 +196,16 @@ export default function CardDetailPanel({
             {cropSrc && (
               <div className="flex flex-col items-center gap-1.5">
                 <p className="text-[10px] text-rift-500 uppercase tracking-wider">Detected</p>
-                <div className="rounded-xl overflow-hidden border border-rift-600/30 shadow-lg w-[180px]">
-                  <img src={cropSrc} alt="" className="w-full h-auto" />
+                <div className="rounded-xl overflow-hidden border border-rift-600/30 shadow-lg w-[180px] aspect-[744/1039] bg-rift-700">
+                  <img src={cropSrc} alt="" className="w-full h-full object-cover" />
                 </div>
               </div>
             )}
             {originalImageUrl && (
               <div className="flex flex-col items-center gap-1.5">
                 <p className="text-[10px] text-rift-500 uppercase tracking-wider">Original</p>
-                <div className="rounded-xl overflow-hidden border border-gold-400/30 shadow-lg w-[180px]">
-                  <img src={originalImageUrl} alt="" className="w-full h-auto" />
+                <div className="rounded-xl overflow-hidden border border-gold-400/30 shadow-lg w-[180px] aspect-[744/1039] bg-rift-700">
+                  <img src={originalImageUrl} alt="" className="w-full h-full object-cover" />
                 </div>
               </div>
             )}
@@ -292,13 +292,15 @@ export default function CardDetailPanel({
               {cardData.text && (
                 <div className="rounded-xl bg-rift-700/30 p-3">
                   <p className="text-[9px] text-rift-500 uppercase tracking-wider mb-1">Card Text</p>
-                  <p className="text-xs text-rift-200 leading-relaxed" dangerouslySetInnerHTML={{ __html: cardData.text }} />
+                  <div className="h-[72px] overflow-y-auto">
+                    <p className="text-xs text-rift-200 leading-relaxed" dangerouslySetInnerHTML={{ __html: cardData.text }} />
+                  </div>
                 </div>
               )}
 
               {/* Tags */}
               {cardData.tags && cardData.tags.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex flex-wrap gap-1.5 max-h-[52px] overflow-y-auto">
                   {cardData.tags.map((tag, i) => (
                     <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-rift-700/50 text-rift-300 border border-rift-600/30">
                       {tag}
