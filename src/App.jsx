@@ -78,6 +78,15 @@ export default function App() {
   const camera = useCamera();
   const detection = useCardDetection();
 
+  // Restart camera when switching back to scan tab (video element was destroyed on unmount)
+  const prevTabRef = useRef(activeTab);
+  useEffect(() => {
+    if (activeTab === 'scan' && prevTabRef.current !== 'scan' && camera.isActive) {
+      camera.startCamera();
+    }
+    prevTabRef.current = activeTab;
+  }, [activeTab, camera.isActive, camera.startCamera]);
+
   // ─── Notifications ─────────────────────────────────────────
   const notificationTimeoutRef = useRef(null);
 
