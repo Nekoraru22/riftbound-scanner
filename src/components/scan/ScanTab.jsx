@@ -844,7 +844,7 @@ export default function ScanTab({
       </div>
 
       {/* Desktop results panel */}
-      <div className="hidden lg:flex flex-col w-[420px] flex-shrink-0 border-l border-rift-600/30 bg-rift-800/95 backdrop-blur-xl">
+      <div className="hidden lg:flex flex-col w-[400px] flex-shrink-0 border-l border-rift-600/30 bg-rift-800/95 backdrop-blur-xl">
         {desktopResultsContent}
       </div>
     </div>
