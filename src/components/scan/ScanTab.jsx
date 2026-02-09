@@ -698,7 +698,7 @@ export default function ScanTab({
         )}
 
         {/* ── Pending cards: desktop side panel ── */}
-        <div className="hidden lg:flex flex-col w-[400px] flex-shrink-0 border-l border-rift-600/30 bg-rift-800/95 backdrop-blur-xl">
+        <div className="hidden lg:flex flex-col w-[450px] flex-shrink-0 border-l border-rift-600/30 bg-rift-800/95 backdrop-blur-xl">
           <div className="flex items-center gap-2 px-4 py-3 flex-shrink-0 border-b border-rift-600/20">
             <h3 className="text-xs font-semibold text-gold-400 flex-1">
               Pending ({pendingCards.length})
@@ -844,7 +844,7 @@ export default function ScanTab({
       </div>
 
       {/* Desktop results panel */}
-      <div className="hidden lg:flex flex-col w-[400px] flex-shrink-0 border-l border-rift-600/30 bg-rift-800/95 backdrop-blur-xl">
+      <div className="hidden lg:flex flex-col w-[450px] flex-shrink-0 border-l border-rift-600/30 bg-rift-800/95 backdrop-blur-xl">
         {desktopResultsContent}
       </div>
     </div>
