@@ -7,7 +7,6 @@ import DetectionCanvas, { DETECTION_COLORS } from '../identify/DetectionCanvas.j
 import CardDetailPanel from '../identify/CardDetailPanel.jsx';
 import { getDetector } from '../../lib/yoloDetector.js';
 import { getMatcher } from '../../lib/cardMatcher.js';
-import { dctFeaturesFromCanvas } from '../../lib/phash.js';
 import { downloadCSV, validateForExport } from '../../lib/csvExporter.js';
 
 // --- Card matching utilities ---
@@ -79,21 +78,16 @@ function rotateCanvas90(canvas) {
   return rot;
 }
 
-function ensurePortrait(canvas) {
-  if (canvas.width > canvas.height) return rotateCanvas90(canvas);
-  return canvas;
-}
-
 function cropRotated(img, cx, cy, w, h, angle) {
-  const imgW = img.naturalWidth || img.width;
-  const imgH = img.naturalHeight || img.height;
-  const diag = Math.sqrt(imgW * imgW + imgH * imgH);
+  // Use card diagonal (not image diagonal) for intermediate canvas — saves memory
+  const cardDiag = Math.sqrt(w * w + h * h);
+  const size = Math.ceil(cardDiag) + 4;
   const big = document.createElement('canvas');
-  big.width = Math.ceil(diag);
-  big.height = Math.ceil(diag);
+  big.width = size;
+  big.height = size;
   const bctx = big.getContext('2d');
-  const bcx = big.width / 2;
-  const bcy = big.height / 2;
+  const bcx = size / 2;
+  const bcy = size / 2;
   bctx.translate(bcx, bcy);
   bctx.rotate(-angle);
   bctx.drawImage(img, -cx, -cy);
@@ -115,10 +109,6 @@ function cropRotated(img, cx, cy, w, h, angle) {
   }
   return c;
 }
-
-const TOP_N = 20;
-const COLOR_W = 0.6;
-const DCT_W = 0.4;
 
 // Artwork crop region (portrait card) — excludes frame, name bar, text/stats
 const ART_TOP = 0.05;
@@ -142,42 +132,20 @@ function cropArtwork(canvas) {
 function identifyCard(cropCanvas, matcher) {
   if (!matcher || !matcher.cards || matcher.cards.length === 0) return null;
 
-  // Crop to artwork region (excludes shared frame/text)
   const art = cropArtwork(cropCanvas);
   const artRotated = cropArtwork(rotateCanvas90(cropCanvas));
 
   const featNormal = computeColorGrid(art, matcher.gridSize);
   const featRotated = computeColorGrid(artRotated, matcher.gridSize);
 
-  // Stage 1: Color grid → rank all cards
-  const scores = [];
+  // Pure color grid ranking (most reliable for real photos)
+  const ranked = [];
   for (const c of matcher.cards) {
     const s1 = cosineSimilarity(featNormal, c.f);
     const s2 = cosineSimilarity(featRotated, c.f);
-    scores.push({ card: c, colorSim: Math.max(s1, s2) });
+    ranked.push({ card: c, sim: Math.max(s1, s2) });
   }
-  scores.sort((a, b) => b.colorSim - a.colorSim);
-
-  // Stage 2: DCT feature re-ranking of top candidates
-  const candidates = scores.slice(0, TOP_N);
-  const hasDCT = candidates.some(c => c.card.d != null);
-
-  if (hasDCT) {
-    const dctNormal = dctFeaturesFromCanvas(art);
-    const dctRotated = dctFeaturesFromCanvas(artRotated);
-
-    for (const c of candidates) {
-      if (c.card.d) {
-        const s1 = cosineSimilarity(dctNormal, c.card.d);
-        const s2 = cosineSimilarity(dctRotated, c.card.d);
-        c.dctSim = Math.max(s1, s2);
-      } else {
-        c.dctSim = c.colorSim;
-      }
-      c.combined = c.colorSim * COLOR_W + c.dctSim * DCT_W;
-    }
-    candidates.sort((a, b) => b.combined - a.combined);
-  }
+  ranked.sort((a, b) => b.sim - a.sim);
 
   const toCardData = (r) => ({
     id: r.card.id,
@@ -195,14 +163,14 @@ function identifyCard(cropCanvas, matcher) {
     tags: r.card.tags,
     illustrator: r.card.illustrator,
     text: r.card.text,
-    sim: (r.colorSim * 100).toFixed(1),
-    similarity: r.colorSim,
+    sim: (r.sim * 100).toFixed(1),
+    similarity: r.sim,
   });
 
   return {
-    card: candidates[0]?.card || null,
-    similarity: candidates[0]?.colorSim || 0,
-    top3: candidates.slice(0, 3).map(toCardData),
+    card: ranked[0]?.card || null,
+    similarity: ranked[0]?.sim || 0,
+    top3: ranked.slice(0, 3).map(toCardData),
   };
 }
 
@@ -244,7 +212,7 @@ function resizeImage(img) {
   canvas.height = nh;
   canvas.getContext('2d').drawImage(img, 0, 0, nw, nh);
   const resized = new Image();
-  resized.src = canvas.toDataURL('image/jpeg', 0.92);
+  resized.src = canvas.toDataURL('image/png');
   resized.width = nw;
   resized.height = nh;
   return resized;
@@ -314,6 +282,7 @@ export default function ScanTab({
 
   const mobileDetectionRefs = useRef([]);
   const desktopDetectionRefs = useRef([]);
+  const originalImageRef = useRef(null);
 
   const totalPending = pendingCards.reduce((sum, c) => sum + c.quantity, 0);
 
@@ -379,7 +348,7 @@ export default function ScanTab({
     setCheckedIndices(new Set());
     const img = new Image();
     img.onload = () => {
-      // Resize large images to prevent mobile crashes
+      originalImageRef.current = img;
       const resized = resizeImage(img);
       if (resized === img) {
         setUploadedImage(img);
@@ -417,15 +386,23 @@ export default function ScanTab({
         return;
       }
 
+      // Crop from original full-resolution image for better matching quality
+      const originalImage = originalImageRef.current || imageElement;
+      const origW = originalImage.naturalWidth || originalImage.width;
+      const dispW = imageElement.naturalWidth || imageElement.width;
+      const cropScale = origW / dispW;
+
       const matcher = getMatcher();
       const results = [];
       for (const det of rawDetections) {
-        let crop = det.cropCanvas;
-        if (!crop) {
-          crop = cropRotated(imageElement, det.box.cx, det.box.cy, det.box.w, det.box.h, det.box.angle);
-        } else {
-          crop = ensurePortrait(crop);
-        }
+        const crop = cropRotated(
+          originalImage,
+          det.box.cx * cropScale,
+          det.box.cy * cropScale,
+          det.box.w * cropScale,
+          det.box.h * cropScale,
+          det.box.angle
+        );
         let matchResult = null;
         if (matcher.ready) matchResult = identifyCard(crop, matcher);
         results.push({
@@ -455,6 +432,7 @@ export default function ScanTab({
     setDetections([]);
     setSelectedDetection(null);
     setCheckedIndices(new Set());
+    originalImageRef.current = null;
   };
 
   const handleAddToExport = useCallback((cardData) => {

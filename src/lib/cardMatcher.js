@@ -1,17 +1,9 @@
 /**
- * Card Matcher - Identifies detected cards using color grid + DCT re-ranking.
- *
- * Two-pass pipeline:
- *   1. Color grid (RGB, gridSize×gridSize features) + cosine similarity → top 20 candidates
- *   2. DCT low-frequency features (189 floats) + cosine similarity → re-rank candidates
+ * Card Matcher — Identifies detected cards using color grid cosine similarity.
+ * Used by both camera mode (useCardDetection) and upload mode (ScanTab).
  */
 
-import { dctFeaturesFromCanvas } from './phash.js';
-
 const HASHES_URL = `/card-hashes.json?v=${__BUILD_TIME__}`;
-const TOP_N_CANDIDATES = 20;
-const COLOR_WEIGHT = 0.6;
-const DCT_WEIGHT = 0.4;
 
 // Artwork crop region (portrait card) — excludes frame, name bar, text/stats
 const ART_TOP = 0.05;
@@ -45,19 +37,14 @@ class CardMatcher {
       const f = new Float32Array(c.f);
       let normSq = 0;
       for (let i = 0; i < f.length; i++) normSq += f[i] * f[i];
-      const d = c.d ? new Float32Array(c.d) : null;
-      return { ...c, f, norm: Math.sqrt(normSq), d };
+      return { ...c, f, norm: Math.sqrt(normSq) };
     });
-    this._hasDCT = this.cards.some(c => c.d != null);
     this.ready = true;
     console.log(`[CardMatcher] Loaded ${this.cards.length} cards (${this.gridSize}x${this.gridSize} grid)`);
   }
 
   /**
-   * Identify a card from a cropped canvas.
-   *
-   * Stage 1: Color grid cosine similarity → top N candidates.
-   * Stage 2: DCT feature cosine similarity → re-rank candidates.
+   * Identify a card from a cropped canvas using color grid similarity.
    *
    * @param {HTMLCanvasElement} cropCanvas - De-rotated card crop
    * @returns {{ card: object, similarity: number } | null}
@@ -65,34 +52,19 @@ class CardMatcher {
   identify(cropCanvas) {
     if (!this.ready || this.cards.length === 0) return null;
 
-    // Crop to artwork region (excludes shared frame/text)
     const art = this._cropArtwork(cropCanvas);
-
-    // Stage 1: Color grid → rank all cards
     const features = this._computeColorGrid(art);
-    const scored = [];
+
+    let bestCard = null;
+    let bestSim = -1;
     for (const card of this.cards) {
-      scored.push({ card, colorSim: this._cosineSimilarity(features, card.f) });
-    }
-    scored.sort((a, b) => b.colorSim - a.colorSim);
-
-    // Stage 2: DCT feature re-ranking of top candidates
-    const candidates = scored.slice(0, TOP_N_CANDIDATES);
-
-    if (this._hasDCT) {
-      const queryDCT = dctFeaturesFromCanvas(art);
-      for (const c of candidates) {
-        c.dctSim = c.card.d ? this._cosineSimilarity(queryDCT, c.card.d) : c.colorSim;
-        c.combined = c.colorSim * COLOR_WEIGHT + c.dctSim * DCT_WEIGHT;
+      const sim = this._cosineSimilarity(features, card.f);
+      if (sim > bestSim) {
+        bestSim = sim;
+        bestCard = card;
       }
-      candidates.sort((a, b) => b.combined - a.combined);
     }
-
-    const best = candidates[0];
-    return {
-      card: best.card,
-      similarity: best.colorSim,
-    };
+    return bestCard ? { card: bestCard, similarity: bestSim } : null;
   }
 
   _cropArtwork(canvas) {
@@ -108,28 +80,17 @@ class CardMatcher {
     return c;
   }
 
-  /**
-   * Per-channel histogram equalization on raw RGBA pixel data (in-place).
-   * Normalizes brightness so dark photos match well-lit reference images.
-   */
   _equalizeHistogram(data) {
     for (let ch = 0; ch < 3; ch++) {
-      // Build histogram
       const hist = new Uint32Array(256);
       for (let i = ch; i < data.length; i += 4) hist[data[i]]++;
-
-      // Cumulative distribution
       const cdf = new Uint32Array(256);
       cdf[0] = hist[0];
       for (let i = 1; i < 256; i++) cdf[i] = cdf[i - 1] + hist[i];
-
-      // Find first non-zero CDF value
       let cdfMin = 0;
       for (let i = 0; i < 256; i++) {
         if (cdf[i] > 0) { cdfMin = cdf[i]; break; }
       }
-
-      // Map pixels
       const totalPixels = data.length / 4;
       const denom = totalPixels - cdfMin;
       if (denom > 0) {
@@ -141,7 +102,6 @@ class CardMatcher {
   }
 
   _computeColorGrid(canvas) {
-    // Equalize at full resolution first (matches Python pipeline)
     const w = canvas.width, h = canvas.height;
     if (!this._eqCanvas) this._eqCanvas = document.createElement('canvas');
     this._eqCanvas.width = w;
@@ -152,7 +112,6 @@ class CardMatcher {
     this._equalizeHistogram(fullData.data);
     eqCtx.putImageData(fullData, 0, 0);
 
-    // Resize equalized image to grid
     if (!this._tmpCanvas) {
       this._tmpCanvas = document.createElement('canvas');
       this._tmpCanvas.width = this.gridSize;
