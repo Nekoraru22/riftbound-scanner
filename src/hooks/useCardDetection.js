@@ -64,7 +64,11 @@ export function useCardDetection() {
   function resolveCardData(matcherCard) {
     if (!matcherCard) return null;
 
-    const collectorNumber = String(matcherCard.number).padStart(3, '0');
+    // Extract collector number from code (e.g. "OGN-089a/298" → "089a", "OGN-309*/298" → "309*")
+    const codePart = (matcherCard.code || '').split('/')[0]; // "OGN-089a"
+    const collectorNumber = codePart.includes('-')
+      ? codePart.split('-').slice(1).join('-')              // "089a"
+      : String(matcherCard.number).padStart(3, '0');        // fallback: "089"
     return {
       id: matcherCard.id,
       name: matcherCard.name,

@@ -141,11 +141,19 @@ export default function ScannerCamera({
           <div className="absolute top-24 left-3 flex flex-col gap-2">
             {/* Detector status */}
             <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-black/50 backdrop-blur-sm">
-              <div className={`w-1.5 h-1.5 rounded-full ${
-                isReady ? 'bg-green-400' :
-                detectorState === 'loading' || detectorState === 'warming' ? 'bg-yellow-400 animate-pulse' :
-                detectorState === 'error' ? 'bg-red-400' : 'bg-rift-500'
-              }`} />
+              <div
+                className={`w-1.5 h-1.5 rounded-full ${
+                  isReady ? 'bg-green-400' :
+                  detectorState === 'loading' || detectorState === 'warming' ? 'bg-yellow-400 animate-pulse' :
+                  detectorState === 'error' ? 'bg-red-400' : 'bg-rift-500'
+                }`}
+                title={
+                  isReady ? 'AI model ready' :
+                  detectorState === 'loading' ? 'Loading AI model' :
+                  detectorState === 'warming' ? 'Warming up AI model' :
+                  detectorState === 'error' ? 'AI model error' : 'AI model inactive'
+                }
+              />
               <span className="text-[10px] font-medium text-white/80">
                 {isReady ? 'AI Ready' :
                  detectorState === 'loading' ? 'Loading...' :
@@ -155,7 +163,7 @@ export default function ScannerCamera({
             </div>
             {autoScanEnabled && (
               <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-green-500/20 backdrop-blur-sm border border-green-400/30">
-                <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+                <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" title="Auto-scan active" />
                 <span className="text-[10px] font-medium text-green-400">Auto</span>
               </div>
             )}

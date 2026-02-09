@@ -236,7 +236,7 @@ export default function CardDetailPanel({
                           const ds = DOMAIN_COLORS[d] || DOMAIN_COLORS.colorless;
                           return (
                             <div key={i} className="flex items-center gap-1">
-                              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: ds.hex }} />
+                              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: ds.hex }} title={d} />
                               <span className={`text-[10px] font-semibold ${ds.text}`}>{d}</span>
                             </div>
                           );
@@ -244,7 +244,7 @@ export default function CardDetailPanel({
                       </div>
                     ) : (
                       <div className="flex items-center justify-center gap-1.5 min-h-[18px]">
-                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: domainStyle?.hex }} />
+                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: domainStyle?.hex }} title={cardData.domain} />
                         <span className={`text-xs font-semibold ${domainStyle?.text || 'text-rift-200'}`}>
                           {cardData.domain}
                         </span>

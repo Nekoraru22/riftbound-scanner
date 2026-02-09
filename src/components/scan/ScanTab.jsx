@@ -150,7 +150,9 @@ function identifyCard(cropCanvas, matcher) {
   const toCardData = (r) => ({
     id: r.card.id,
     name: r.card.name,
-    collectorNumber: String(r.card.number).padStart(3, '0'),
+    collectorNumber: ((r.card.code || '').split('/')[0].includes('-')
+      ? (r.card.code || '').split('/')[0].split('-').slice(1).join('-')
+      : String(r.card.number).padStart(3, '0')),
     code: r.card.code,
     set: r.card.set,
     setName: r.card.setName,

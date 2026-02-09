@@ -50,11 +50,20 @@ export function generateCSV(cards) {
   const lines = [CSV_HEADERS.join(',')];
 
   for (const card of cards) {
+    const rarity = (card.cardData.rarity || '').toLowerCase();
+    const id = (card.cardData.id || '').toLowerCase();
+    const isShowcaseOrStar = rarity === 'showcase' || id.includes('star');
+
+    // For export: strip '*' from collector number, append (alt) to name for showcase/star
+    const exportName = isShowcaseOrStar
+      ? `${card.cardData.name} (alt)`
+      : card.cardData.name;
+    const exportCollector = (card.cardData.collectorNumber || '').replace(/\*/g, '');
+
     const row = [
       card.quantity || 1,
-      escapeCSV(card.cardData.name),
-      // CRITICAL: Collector number as string with leading zeros preserved
-      escapeCSV(card.cardData.collectorNumber),
+      escapeCSV(exportName),
+      escapeCSV(exportCollector),
       escapeCSV(card.cardData.set || 'OGN'),
       escapeCSV(card.condition || 'Near Mint'),
       escapeCSV(card.language || 'English'),

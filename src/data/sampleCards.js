@@ -18,10 +18,31 @@ export const RARITY_STYLES = {
   showcase: { label: 'S', color: 'text-amber-400' },
 };
 
-// Rare and Epic cards are always foil; Common and Uncommon have both versions
-export function isFoilOnly(rarity) {
-  const r = (rarity || '').toLowerCase();
-  return r === 'rare' || r === 'epic';
+// Determines if a card is exclusively foil (no standard version exists)
+export function isFoilOnly(card) {
+  const rarity = (card.rarity || '').toLowerCase();
+  const id = (card.id || '').toLowerCase();
+  const code = (card.code || '');
+  const collectorNumber = card.collectorNumber || '';
+
+  // Star variants are always foil (id: "ogn-309-star-298", code: "OGN-309*/298")
+  if (id.includes('star') || code.includes('*')) {
+    return true;
+  }
+
+  // Overnumbered cards (collector number > set total) are showcase/foil
+  const codeParts = code.split('/');
+  if (codeParts.length === 2) {
+    const num = parseInt(collectorNumber.replace(/\D/g, '')) || 0;
+    const total = parseInt(codeParts[1]) || 0;
+    if (num > 0 && total > 0 && num > total) {
+      return true;
+    }
+  }
+
+  // These rarities are exclusively foil
+  const foilOnlyRarities = ['rare', 'epic', 'legendary', 'showcase', 'legend'];
+  return foilOnlyRarities.includes(rarity);
 }
 
 // Condition options for CardNexus/PowerTools

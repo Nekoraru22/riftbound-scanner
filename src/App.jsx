@@ -221,7 +221,7 @@ export default function App() {
           quantity: 1,
           condition: defaults.condition,
           language: defaults.language,
-          foil: isFoilOnly(cardData.rarity) || defaults.foil,
+          foil: isFoilOnly(cardData) || defaults.foil,
           confidence,
           similarity,
           scanTimestamp: timestamp,
@@ -350,7 +350,7 @@ export default function App() {
           quantity: 1,
           condition: defaults.condition,
           language: defaults.language,
-          foil: isFoilOnly(cardData.rarity) || defaults.foil,
+          foil: isFoilOnly(cardData) || defaults.foil,
           confidence: 1,
           scanTimestamp: Date.now(),
         }];
@@ -377,7 +377,7 @@ export default function App() {
             quantity: 1,
             condition: defaults.condition,
             language: defaults.language,
-            foil: isFoilOnly(cardData.rarity) || defaults.foil,
+            foil: isFoilOnly(cardData) || defaults.foil,
             confidence: 1,
             scanTimestamp: Date.now(),
           }];

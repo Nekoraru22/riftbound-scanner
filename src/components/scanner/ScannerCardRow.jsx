@@ -6,7 +6,7 @@ const ScannerCardRow = memo(function ScannerCardRow({ card, index, onUpdate, onR
   const { cardData, quantity, condition, language, foil } = card;
   const domainStyle = DOMAIN_COLORS[cardData.domain] || DOMAIN_COLORS.colorless;
   const rarityStyle = RARITY_STYLES[cardData.rarity] || RARITY_STYLES.common;
-  const foilOnly = isFoilOnly(cardData.rarity);
+  const foilOnly = isFoilOnly(cardData);
 
   const handleFieldChange = (field, value) => {
     onUpdate(index, { ...card, [field]: value });
@@ -32,8 +32,9 @@ const ScannerCardRow = memo(function ScannerCardRow({ card, index, onUpdate, onR
               <span
                 className="w-2 h-2 rounded-full flex-shrink-0"
                 style={{ backgroundColor: domainStyle.hex }}
+                title={cardData.domain}
               />
-              <span className={`text-[10px] font-mono font-bold ${rarityStyle.color}`}>
+              <span className={`text-[10px] font-mono font-bold ${rarityStyle.color}`} title={cardData.rarity}>
                 {rarityStyle.label}
               </span>
               <span className="text-[10px] font-mono text-rift-500">
