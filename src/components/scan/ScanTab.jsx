@@ -267,6 +267,8 @@ export default function ScanTab({
   batchDefaults,
   minConfidence,
   onUpdateMinConfidence,
+  autoScanEnabled,
+  onToggleAutoScan,
 }) {
   const [scanMode, setScanMode] = useState('camera');
   const [sheetExpanded, setSheetExpanded] = useState(false);
@@ -602,6 +604,8 @@ export default function ScanTab({
             hasTorch={camera.hasTorch}
             torchOn={camera.torchOn}
             onToggleTorch={camera.toggleTorch}
+            autoScanEnabled={autoScanEnabled}
+            onToggleAutoScan={onToggleAutoScan}
           />
 
           {/* Mode switcher + confidence slider floating on camera */}

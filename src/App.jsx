@@ -8,6 +8,7 @@ import CollectionTab from './components/collection/CollectionTab.jsx';
 import SettingsTab from './components/settings/SettingsTab.jsx';
 import { useCamera } from './hooks/useCamera.js';
 import { useCardDetection } from './hooks/useCardDetection.js';
+import { useAutoScan } from './hooks/useAutoScan.js';
 import { downloadCSV, validateForExport } from './lib/csvExporter.js';
 import { getMatcher } from './lib/cardMatcher.js';
 import { isFoilOnly } from './data/sampleCards.js';
@@ -224,6 +225,15 @@ export default function App() {
     }
   }, [showNotification]);
 
+  // ─── Auto-Scan ────────────────────────────────────────────
+  const autoScan = useAutoScan({
+    cameraIsActive: camera.isActive,
+    isProcessing: detection.isProcessing,
+    detectSingleFrame: detection.detectSingleFrame,
+    captureFrame: camera.captureFrame,
+    onCardDetected: handleCardDetected,
+  });
+
   // ─── Snap Scan (tap to capture single frame) ──────────────
   const handleSnapScan = useCallback(async () => {
     if (!camera.isActive || detection.isProcessing) return;
@@ -231,10 +241,11 @@ export default function App() {
     const result = await detection.detectSingleFrame(camera.captureFrame);
     if (result && result.matched) {
       handleCardDetected(result);
+      autoScan.setLastCardId(result.cardData.id);
     } else {
       showNotification('No card detected — try again', 'info');
     }
-  }, [camera.isActive, camera.captureFrame, detection, handleCardDetected, showNotification]);
+  }, [camera.isActive, camera.captureFrame, detection, handleCardDetected, showNotification, autoScan]);
 
   // ─── Pending → Export list handlers ──────────────────────────
   const handleConfirmPending = useCallback((index) => {
@@ -407,6 +418,8 @@ export default function App() {
             batchDefaults={batchDefaults}
             minConfidence={minConfidence}
             onUpdateMinConfidence={setMinConfidence}
+            autoScanEnabled={autoScan.autoScanEnabled}
+            onToggleAutoScan={autoScan.toggleAutoScan}
           />
         )}
 

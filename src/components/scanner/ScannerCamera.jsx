@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Camera, CameraOff, RotateCw, Zap, ZapOff, AlertCircle, ScanLine } from 'lucide-react';
+import { Camera, CameraOff, RotateCw, Zap, ZapOff, AlertCircle, ScanLine, Radar } from 'lucide-react';
 
 export default function ScannerCamera({
   videoRef,
@@ -15,6 +15,8 @@ export default function ScannerCamera({
   hasTorch,
   torchOn,
   onToggleTorch,
+  autoScanEnabled,
+  onToggleAutoScan,
 }) {
   const [dimensions, setDimensions] = useState({ w: 0, h: 0 });
   const [showDetection, setShowDetection] = useState(false);
@@ -151,13 +153,19 @@ export default function ScannerCamera({
                  detectorState === 'error' ? 'Error' : 'Inactive'}
               </span>
             </div>
+            {autoScanEnabled && (
+              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-green-500/20 backdrop-blur-sm border border-green-400/30">
+                <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+                <span className="text-[10px] font-medium text-green-400">Auto</span>
+              </div>
+            )}
           </div>
 
           {/* Instructions */}
           {!hasDetection && !isProcessing && (
             <div className="absolute bottom-20 left-4 right-4 text-center">
               <p className="text-xs text-white/50 font-body">
-                Tap to scan card
+                {autoScanEnabled ? 'Auto-scanning...' : 'Tap to scan card'}
               </p>
             </div>
           )}
@@ -219,6 +227,17 @@ export default function ScannerCamera({
               {torchOn ? <Zap className="w-4.5 h-4.5" /> : <ZapOff className="w-4.5 h-4.5" />}
             </button>
           )}
+          <button
+            onClick={onToggleAutoScan}
+            className={`w-11 h-11 rounded-xl backdrop-blur-sm border flex items-center justify-center transition-all ${
+              autoScanEnabled
+                ? 'bg-green-500/30 border-green-400/50 text-green-400 animate-pulse'
+                : 'bg-black/50 border-white/10 text-white/60'
+            }`}
+            title={autoScanEnabled ? 'Stop auto-scan' : 'Start auto-scan'}
+          >
+            <Radar className="w-4.5 h-4.5" />
+          </button>
           <button
             onClick={onStopCamera}
             className="w-11 h-11 rounded-xl bg-black/50 backdrop-blur-sm border border-white/10 flex items-center justify-center text-red-400 hover:bg-red-500/20 transition-colors"
