@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
 import './index.css';
+import { registerSW } from 'virtual:pwa-register';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
@@ -9,11 +10,14 @@ ReactDOM.createRoot(document.getElementById('root')).render(
   </React.StrictMode>
 );
 
-// Register service worker for PWA (production only)
-if ('serviceWorker' in navigator && import.meta.env.PROD) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {
-      // Service worker registration failed silently
-    });
-  });
-}
+// Register service worker with auto-update
+const updateSW = registerSW({
+  onNeedRefresh() {
+    // Forzar recarga cuando hay una nueva versión
+    updateSW(true);
+  },
+  onOfflineReady() {
+    console.log('App ready (offline)');
+  },
+  immediate: true
+});
