@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { ChevronDown, Plus, Minus, CheckSquare, Square, Trash2, Sparkles } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { ChevronDown, Plus, Minus, CheckSquare, Square, Trash2, Sparkles, Search, X } from 'lucide-react';
 import { DOMAIN_COLORS, RARITY_STYLES, isFoilOnly } from '../../data/sampleCards.js';
-import { getCardImageUrl } from '../../lib/cardMatcher.js';
+import { getCardImageUrl, getMatcher } from '../../lib/cardMatcher.js';
 
 /**
  * Build a card data object directly from the match entry.
@@ -55,13 +55,17 @@ export default function CardDetailPanel({
   const [localQuantity, setLocalQuantity] = useState(1);
   const [localFoil, setLocalFoil] = useState(false);
   const [localPromo, setLocalPromo] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [manualCard, setManualCard] = useState(null);
+  const searchInputRef = useRef(null);
 
   const matchResult = detection.matchResult;
   const hasMatch = matchResult && matchResult.similarity > 0.55;
   const top3 = matchResult?.top3 || [];
 
-  // The active match is the one selected by the user (defaults to #1)
-  const activeMatch = top3[selectedMatchIdx] || top3[0];
+  // The active match is the one selected by the user, or a manually searched card
+  const activeMatch = manualCard || top3[selectedMatchIdx] || top3[0];
   const similarity = activeMatch ? activeMatch.similarity : 0;
   const activeCardId = activeMatch?.id;
 
@@ -102,8 +106,29 @@ export default function CardDetailPanel({
     : 'text-red-400 bg-red-400/10';
 
   const handleSelectMatch = (matchIdx) => {
+    setManualCard(null);
     setSelectedMatchIdx(matchIdx);
   };
+
+  const handleSearchSelect = (card) => {
+    setManualCard(card);
+    setSearchOpen(false);
+    setSearchQuery('');
+  };
+
+  // Compute search results (filter all cards by name)
+  const searchResults = searchOpen && searchQuery.length >= 2
+    ? getMatcher().cards
+        .filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase()))
+        .slice(0, 8)
+    : [];
+
+  // Auto-focus search input when opened
+  useEffect(() => {
+    if (searchOpen && searchInputRef.current) {
+      searchInputRef.current.focus();
+    }
+  }, [searchOpen]);
 
   // Build color style from prop
   const colorStyle = color
@@ -207,7 +232,7 @@ export default function CardDetailPanel({
           <div className="flex items-start justify-center gap-4">
             {cropSrc && (
               <div className="flex flex-col items-center gap-1.5">
-                <p className="text-[10px] text-rift-500 uppercase tracking-wider">Detected</p>
+                <p className="text-[10px] text-rift-400 uppercase tracking-wider">Detected</p>
                 <div className="rounded-xl overflow-hidden border border-rift-600/30 shadow-lg w-[180px] aspect-[744/1039] bg-rift-700">
                   <img src={cropSrc} alt="" className="w-full h-full object-cover" />
                 </div>
@@ -215,7 +240,7 @@ export default function CardDetailPanel({
             )}
             {originalImageUrl && (
               <div className="flex flex-col items-center gap-1.5">
-                <p className="text-[10px] text-rift-500 uppercase tracking-wider">Original</p>
+                <p className="text-[10px] text-rift-400 uppercase tracking-wider">Original</p>
                 <div className="rounded-xl overflow-hidden border border-gold-400/30 shadow-lg w-[180px] aspect-[744/1039] bg-rift-700">
                   <img src={originalImageUrl} alt="" className="w-full h-full object-cover" />
                 </div>
@@ -231,7 +256,7 @@ export default function CardDetailPanel({
                 <h3 className="text-base font-bold text-rift-100">{cardData.name}</h3>
                 <p className="text-xs text-rift-400">
                   {cardData.setName} ({cardData.set}) · #{cardData.collectorNumber}
-                  {cardData.code && <span className="text-rift-500 ml-1">· {cardData.code}</span>}
+                  {cardData.code && <span className="text-rift-400 ml-1">· {cardData.code}</span>}
                 </p>
               </div>
 
@@ -239,7 +264,7 @@ export default function CardDetailPanel({
               <div className="grid grid-cols-3 gap-2">
                 {cardData.domain && (
                   <div className="rounded-xl bg-rift-700/50 p-2.5 text-center">
-                    <p className="text-[9px] text-rift-500 uppercase tracking-wider mb-1">
+                    <p className="text-[9px] text-rift-400 uppercase tracking-wider mb-1">
                       {cardData.domains && cardData.domains.length > 1 ? 'Domains' : 'Domain'}
                     </p>
                     {cardData.domains && cardData.domains.length > 1 ? (
@@ -265,7 +290,7 @@ export default function CardDetailPanel({
                   </div>
                 )}
                 <div className="rounded-xl bg-rift-700/50 p-2.5 text-center">
-                  <p className="text-[9px] text-rift-500 uppercase tracking-wider mb-1">Rarity</p>
+                  <p className="text-[9px] text-rift-400 uppercase tracking-wider mb-1">Rarity</p>
                   <div className="min-h-[18px] flex items-center justify-center">
                     <span className={`text-xs font-semibold ${rarityStyle?.color || 'text-rift-200'}`}>
                       {cardData.rarity}
@@ -273,7 +298,7 @@ export default function CardDetailPanel({
                   </div>
                 </div>
                 <div className="rounded-xl bg-rift-700/50 p-2.5 text-center">
-                  <p className="text-[9px] text-rift-500 uppercase tracking-wider mb-1">Type</p>
+                  <p className="text-[9px] text-rift-400 uppercase tracking-wider mb-1">Type</p>
                   <div className="min-h-[18px] flex items-center justify-center">
                     <span className="text-xs font-semibold text-rift-200">
                       {cardData.type}
@@ -303,7 +328,7 @@ export default function CardDetailPanel({
               {/* Card text */}
               {cardData.text && (
                 <div className="rounded-xl bg-rift-700/30 p-3">
-                  <p className="text-[9px] text-rift-500 uppercase tracking-wider mb-1">Card Text</p>
+                  <p className="text-[9px] text-rift-400 uppercase tracking-wider mb-1">Card Text</p>
                   <div className="h-[72px] overflow-y-auto">
                     <p className="text-xs text-rift-200 leading-relaxed" dangerouslySetInnerHTML={{ __html: cardData.text }} />
                   </div>
@@ -323,15 +348,15 @@ export default function CardDetailPanel({
 
               {/* Illustrator */}
               {cardData.illustrator && (
-                <p className="text-[10px] text-rift-500">
-                  Illustrated by <span className="text-rift-400">{cardData.illustrator}</span>
+                <p className="text-[10px] text-rift-400">
+                  Illustrated by <span className="text-rift-300">{cardData.illustrator}</span>
                 </p>
               )}
 
               {/* Confidence bar */}
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] text-rift-500 uppercase tracking-wider">Confidence</span>
+                  <span className="text-[10px] text-rift-400 uppercase tracking-wider">Confidence</span>
                   <span className={`text-xs font-bold ${
                     similarity >= 0.9 ? 'text-green-400' :
                     similarity >= 0.85 ? 'text-yellow-400' : 'text-red-400'
@@ -353,12 +378,32 @@ export default function CardDetailPanel({
             </div>
           )}
 
-          {/* Top 3 matches - clickable to switch */}
-          {top3.length > 1 && (
+          {/* Search button when there's only 1 match */}
+          {top3.length <= 1 && !searchOpen && !manualCard && cardData && (
+            <button
+              onClick={() => setSearchOpen(true)}
+              className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl text-[10px] text-rift-400 hover:text-rift-200 bg-rift-700/30 hover:bg-rift-700/50 border border-transparent hover:border-rift-600/30 transition-all"
+            >
+              <Search className="w-3 h-3" />
+              Wrong card? Search manually
+            </button>
+          )}
+
+          {/* Top 3 matches + search */}
+          {top3.length > 1 && !searchOpen && !manualCard && (
             <div>
-              <p className="text-[10px] text-rift-500 uppercase tracking-wider mb-2">
-                Best matches — tap to change
-              </p>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-[10px] text-rift-400 uppercase tracking-wider">
+                  Best matches — tap to change
+                </p>
+                <button
+                  onClick={() => setSearchOpen(true)}
+                  className="text-[10px] text-rift-400 hover:text-rift-200 flex items-center gap-1 transition-colors"
+                >
+                  <Search className="w-3 h-3" />
+                  Search
+                </button>
+              </div>
               <div className="space-y-1.5">
                 {top3.map((match, i) => {
                   const isActive = i === selectedMatchIdx;
@@ -401,12 +446,85 @@ export default function CardDetailPanel({
             </div>
           )}
 
+          {/* Manual card selected — show reset link */}
+          {manualCard && !searchOpen && (
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] text-amber-400">
+                Manually selected
+              </p>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setSearchOpen(true)}
+                  className="text-[10px] text-rift-400 hover:text-rift-200 flex items-center gap-1 transition-colors"
+                >
+                  <Search className="w-3 h-3" />
+                  Search again
+                </button>
+                <button
+                  onClick={() => setManualCard(null)}
+                  className="text-[10px] text-rift-400 hover:text-rift-200 transition-colors"
+                >
+                  Reset
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Search panel */}
+          {searchOpen && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <div className="flex-1 relative">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-rift-400" />
+                  <input
+                    ref={searchInputRef}
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search card name..."
+                    className="w-full h-8 pl-8 pr-3 text-xs bg-rift-700 border border-rift-600/40 rounded-lg text-rift-100 placeholder-rift-400 focus:outline-none focus:border-gold-500/60"
+                  />
+                </div>
+                <button
+                  onClick={() => { setSearchOpen(false); setSearchQuery(''); }}
+                  className="w-8 h-8 rounded-lg bg-rift-700 border border-rift-600/40 flex items-center justify-center text-rift-400 hover:text-rift-200 transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              {searchResults.length > 0 && (
+                <div className="max-h-[200px] overflow-y-auto space-y-1 rounded-lg bg-rift-700/30 p-1.5">
+                  {searchResults.map((card) => {
+                    const ds = DOMAIN_COLORS[card.domain] || DOMAIN_COLORS.colorless;
+                    return (
+                      <button
+                        key={card.id}
+                        onClick={() => handleSearchSelect(card)}
+                        className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-left bg-rift-800/50 hover:bg-rift-600/50 transition-colors"
+                      >
+                        <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: ds.hex }} />
+                        <span className="text-xs text-rift-100 truncate flex-1">{card.name}</span>
+                        <span className="text-[10px] text-rift-400 flex-shrink-0">[{card.set}]</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {searchQuery.length >= 2 && searchResults.length === 0 && (
+                <p className="text-[10px] text-rift-400 text-center py-2">No cards found</p>
+              )}
+              {searchQuery.length < 2 && (
+                <p className="text-[10px] text-rift-400 text-center py-2">Type at least 2 characters</p>
+              )}
+            </div>
+          )}
+
           {/* Quantity, Foil & Promo controls */}
           {cardData && (
             <div className="flex items-center gap-3">
               {/* Quantity */}
               <div className="flex items-center gap-1">
-                <span className="text-[10px] text-rift-500 uppercase tracking-wider mr-1">Qty</span>
+                <span className="text-[10px] text-rift-400 uppercase tracking-wider mr-1">Qty</span>
                 <button
                   onClick={() => setLocalQuantity(q => Math.max(1, q - 1))}
                   className="w-7 h-7 rounded-lg bg-rift-700 border border-rift-600/40 flex items-center justify-center text-rift-300 hover:bg-rift-600 transition-colors"
@@ -485,7 +603,7 @@ export default function CardDetailPanel({
           {/* No match message */}
           {!hasMatch && (
             <div className="text-center py-2">
-              <p className="text-xs text-rift-500">
+              <p className="text-xs text-rift-400">
                 No reliable match found for this detection.
               </p>
             </div>

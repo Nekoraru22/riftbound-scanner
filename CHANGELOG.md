@@ -1,5 +1,45 @@
 # Changelog
 
+## [1.3.0] - 2025-02-13
+
+### Promo Cards Support & Manual Card Selection
+
+Added promo card support with OGNX set export and manual card search for misidentified cards.
+
+#### New Features
+
+- **Promo toggle**
+  - Added promo toggle button to both CardDetailPanel (scan results) and ScannerCardRow (collection)
+  - When enabled, cards export with set "OGNX" instead of "OGN" in CSV
+
+- **Manual card search & replace**
+  - Added search functionality in CardDetailPanel for manually selecting cards
+  - Click "Search" button (or "Wrong card? Search manually") to open search panel
+  - Type-ahead search filters all 664 cards by name (minimum 2 characters)
+  - Shows up to 8 results with domain color indicator, card name, and set
+  - Selected cards show "Manually selected" banner with "Search again" and "Reset" options
+  - Manually selected cards override scanner matches and persist through add-to-collection
+
+- **Condition abbreviations legend**
+  - Added legend at bottom of Collection tab: "NM = Near Mint · LP = Lightly Played · MP = Moderately Played · HP = Heavily Played · D = Damaged"
+  - Condition dropdowns show abbreviations for space efficiency
+
+#### Changes
+
+- **Language options reduced** — Only English and Chinese remain (removed all other languages for being innecessary)
+- **Improved text contrast** — Changed label colors from `text-rift-500` to `text-rift-400` throughout CardDetailPanel for better readability
+- **Number input improvements** — Changed from `type="number"` to `type="text"` with `inputMode="numeric"` to hide browser arrows, added dynamic width in Collection rows
+
+#### Files Modified
+
+| File | What changed |
+|------|-------------|
+| `src/components/identify/CardDetailPanel.jsx` | Added search state/panel, promo toggle, manual card override, improved text contrast |
+| `src/components/scanner/ScannerCardRow.jsx` | Added promo toggle, removed variant selector, condition dropdowns show abbreviations |
+| `src/components/collection/CollectionTab.jsx` | Added condition abbreviations legend |
+| `src/lib/csvExporter.js` | Changed promo export logic: set = "OGNX" when promo = true |
+| `src/data/sampleCards.js` | Reduced LANGUAGES to English and Chinese only |
+
 ## [1.2.0] - 2025-02-09
 
 ### Card Identification Simplification & Quality Improvements
