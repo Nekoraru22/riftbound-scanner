@@ -1,6 +1,8 @@
 # RiftBound Scanner
 
-A web application for scanning and cataloging RiftBound TCG cards using AI-powered image recognition.
+A web application for scanning and cataloging RiftBound TCG cards using Computer Vision.
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/nekoraru22)
 
 ## Architecture Overview
 

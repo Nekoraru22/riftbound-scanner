@@ -637,6 +637,14 @@ export default function ScanTab({
           )}
         </div>
 
+        {/* ── Backdrop to close sheet on mobile ── */}
+        {pendingCards.length > 0 && sheetExpanded && (
+          <div
+            className="absolute inset-0 bg-black/40 z-20 backdrop-blur-sm lg:hidden transition-opacity duration-300 fade-in"
+            onClick={() => setSheetExpanded(false)}
+          />
+        )}
+
         {/* ── Pending cards: mobile bottom overlay ── */}
         {pendingCards.length > 0 && (
           <div
@@ -685,7 +693,7 @@ export default function ScanTab({
                     key={`${card.cardData.id}-${card.scanTimestamp}`}
                     detection={pendingToDetection(card)}
                     index={index}
-                    onAddToScanner={() => onConfirmPending(index)}
+                    onAddToScanner={(payload) => onConfirmPending({ index, ...payload })}
                     onRemove={() => onRemovePending(index)}
                     quantity={card.quantity}
                     isChecked={checkedPendingIndices.has(index)}
@@ -734,7 +742,7 @@ export default function ScanTab({
                   key={`${card.cardData.id}-${card.scanTimestamp}`}
                   detection={pendingToDetection(card)}
                   index={index}
-                  onAddToScanner={() => onConfirmPending(index)}
+                  onAddToScanner={(payload) => onConfirmPending({ index, ...payload })}
                   onRemove={() => onRemovePending(index)}
                   quantity={card.quantity}
                   isChecked={checkedPendingIndices.has(index)}

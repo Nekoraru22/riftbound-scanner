@@ -257,25 +257,38 @@ export default function App() {
   }, [camera.isActive, camera.captureFrame, detection, handleCardDetected, showNotification, autoScan]);
 
   // ─── Pending → Export list handlers ──────────────────────────
-  const handleConfirmPending = useCallback((index) => {
+  const handleConfirmPending = useCallback((indexOrPayload) => {
+    const isPayload = typeof indexOrPayload === 'object' && indexOrPayload.index !== undefined;
+    const index = isPayload ? indexOrPayload.index : indexOrPayload;
+    const payloadData = isPayload ? indexOrPayload : null;
+
     setPendingCards(prev => {
       const card = prev[index];
       if (!card) return prev;
 
+      // Use payload data if provided (manually selected card), otherwise use original
+      const cardToAdd = payloadData ? {
+        ...card,
+        cardData: payloadData.cardData,
+        quantity: payloadData.quantity,
+        foil: payloadData.foil,
+        promo: payloadData.promo,
+      } : card;
+
       setScannedCards(exportPrev => {
-        const existingIndex = exportPrev.findIndex(c => c.cardData.id === card.cardData.id);
+        const existingIndex = exportPrev.findIndex(c => c.cardData.id === cardToAdd.cardData.id);
         if (existingIndex >= 0) {
           const updated = [...exportPrev];
           updated[existingIndex] = {
             ...updated[existingIndex],
-            quantity: updated[existingIndex].quantity + card.quantity,
+            quantity: updated[existingIndex].quantity + cardToAdd.quantity,
           };
           return updated;
         }
-        return [...exportPrev, { ...card }];
+        return [...exportPrev, cardToAdd];
       });
 
-      showNotification(`${card.cardData.name} added to export`, 'success');
+      showNotification(`${cardToAdd.cardData.name} added to export`, 'success');
       return prev.filter((_, i) => i !== index);
     });
   }, [showNotification]);

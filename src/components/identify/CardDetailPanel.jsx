@@ -13,7 +13,7 @@ function resolveCardData(activeMatch) {
   return {
     id: activeMatch.id,
     name: activeMatch.name,
-    collectorNumber: activeMatch.collectorNumber,
+    collectorNumber: activeMatch.collectorNumber || String(activeMatch.number || ''),
     code: activeMatch.code,
     set: activeMatch.set,
     setName: activeMatch.setName,
@@ -123,10 +123,14 @@ export default function CardDetailPanel({
         .slice(0, 8)
     : [];
 
-  // Auto-focus search input when opened
+  // Auto-focus search input when opened and scroll into view
   useEffect(() => {
     if (searchOpen && searchInputRef.current) {
       searchInputRef.current.focus();
+      // Small delay to let the mobile keyboard appear, then scroll
+      setTimeout(() => {
+        searchInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 300);
     }
   }, [searchOpen]);
 
@@ -493,7 +497,7 @@ export default function CardDetailPanel({
                 </button>
               </div>
               {searchResults.length > 0 && (
-                <div className="max-h-[200px] overflow-y-auto space-y-1 rounded-lg bg-rift-700/30 p-1.5">
+                <div className="max-h-[120px] sm:max-h-[200px] overflow-y-auto space-y-1 rounded-lg bg-rift-700/30 p-1.5">
                   {searchResults.map((card) => {
                     const ds = DOMAIN_COLORS[card.domain] || DOMAIN_COLORS.colorless;
                     return (
