@@ -4,7 +4,7 @@ export default function ToastNotification({ notification }) {
   if (!notification) return null;
 
   return (
-    <div className={`fixed bottom-32 md:bottom-20 right-3 md:right-[435px] z-50 px-3 py-1.5 rounded-full text-xs font-medium shadow-lg fade-in ${
+    <div className={`fixed bottom-32 md:bottom-20 right-3 z-50 px-3 py-1.5 rounded-full text-xs font-medium shadow-lg fade-in ${
       notification.type === 'success'
         ? 'bg-green-500/90 text-white backdrop-blur-sm'
         : notification.type === 'error'

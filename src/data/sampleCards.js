@@ -57,12 +57,5 @@ export const CONDITIONS = [
 // Language options
 export const LANGUAGES = [
   { value: 'English', label: 'English', short: 'ENG' },
-  { value: 'Spanish', label: 'Español', short: 'SPA' },
-  { value: 'French', label: 'Français', short: 'FRE' },
-  { value: 'German', label: 'Deutsch', short: 'GER' },
-  { value: 'Italian', label: 'Italiano', short: 'ITA' },
-  { value: 'Portuguese', label: 'Português', short: 'POR' },
-  { value: 'Japanese', label: '日本語', short: 'JPN' },
-  { value: 'Korean', label: '한국어', short: 'KOR' },
-  { value: 'Chinese', label: '中文', short: 'CHN' },
+  { value: 'Chinese', label: 'Chinese', short: 'CN' },
 ];

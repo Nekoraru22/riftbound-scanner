@@ -3,7 +3,7 @@ import { Trash2, Plus, Minus, Sparkles } from 'lucide-react';
 import { CONDITIONS, LANGUAGES, DOMAIN_COLORS, RARITY_STYLES, isFoilOnly } from '../../data/sampleCards.js';
 
 const ScannerCardRow = memo(function ScannerCardRow({ card, index, onUpdate, onRemove }) {
-  const { cardData, quantity, condition, language, foil } = card;
+  const { cardData, quantity, condition, language, foil, promo } = card;
   const domainStyle = DOMAIN_COLORS[cardData.domain] || DOMAIN_COLORS.colorless;
   const rarityStyle = RARITY_STYLES[cardData.rarity] || RARITY_STYLES.common;
   const foilOnly = isFoilOnly(cardData);
@@ -52,8 +52,8 @@ const ScannerCardRow = memo(function ScannerCardRow({ card, index, onUpdate, onR
             </button>
           </div>
 
-          {/* Bottom row: qty, condition, language, foil */}
-          <div className="flex items-center gap-2">
+          {/* Bottom row: qty, condition, language, foil, variant */}
+          <div className="flex items-center gap-2 flex-wrap">
         {/* Quantity */}
         <div className="flex items-center gap-0.5">
           <button
@@ -63,12 +63,15 @@ const ScannerCardRow = memo(function ScannerCardRow({ card, index, onUpdate, onR
             <Minus className="w-2.5 h-2.5" />
           </button>
           <input
-            type="number"
-            min="1"
-            max="99"
+            type="text"
+            inputMode="numeric"
             value={quantity}
-            onChange={(e) => handleFieldChange('quantity', Math.max(1, parseInt(e.target.value) || 1))}
-            className="w-8 h-6 text-center text-xs font-mono bg-rift-800 border border-rift-600/40 rounded-lg text-rift-100 focus:outline-none focus:border-gold-500/60"
+            onChange={(e) => {
+              const v = parseInt(e.target.value);
+              if (!isNaN(v)) handleFieldChange('quantity', Math.min(99, Math.max(1, v)));
+            }}
+            className="h-6 text-center text-xs font-mono bg-rift-800 border border-rift-600/40 rounded-lg text-rift-100 focus:outline-none focus:border-gold-500/60"
+            style={{ width: `${Math.max(2, String(quantity).length + 1)}ch` }}
           />
           <button
             onClick={() => handleFieldChange('quantity', Math.min(99, quantity + 1))}
@@ -82,6 +85,7 @@ const ScannerCardRow = memo(function ScannerCardRow({ card, index, onUpdate, onR
         <select
           value={condition}
           onChange={(e) => handleFieldChange('condition', e.target.value)}
+          title={CONDITIONS.find(c => c.value === condition)?.label || condition}
           className="h-6 text-[10px] bg-rift-800 border border-rift-600/40 rounded-lg text-rift-200 px-1.5 focus:outline-none focus:border-gold-500/60 appearance-none cursor-pointer"
         >
           {CONDITIONS.map((c) => (
@@ -93,10 +97,11 @@ const ScannerCardRow = memo(function ScannerCardRow({ card, index, onUpdate, onR
         <select
           value={language}
           onChange={(e) => handleFieldChange('language', e.target.value)}
+          title={LANGUAGES.find(l => l.value === language)?.label || language}
           className="h-6 text-[10px] bg-rift-800 border border-rift-600/40 rounded-lg text-rift-200 px-1.5 focus:outline-none focus:border-gold-500/60 appearance-none cursor-pointer"
         >
           {LANGUAGES.map((l) => (
-            <option key={l.value} value={l.value}>{l.short}</option>
+            <option key={l.value} value={l.value}>{l.label}</option>
           ))}
         </select>
 
@@ -113,6 +118,18 @@ const ScannerCardRow = memo(function ScannerCardRow({ card, index, onUpdate, onR
         >
           <Sparkles className="w-3 h-3" />
           {foilOnly && <span className="text-[8px] font-mono">F</span>}
+        </button>
+
+        {/* Promo toggle */}
+        <button
+          onClick={() => handleFieldChange('promo', !promo)}
+          className={`h-6 rounded-lg border flex items-center justify-center transition-all flex-shrink-0 px-1.5 text-[10px] font-medium cursor-pointer ${
+            promo
+              ? 'bg-amber-500/20 border-amber-400/50 text-amber-400 hover:bg-amber-500/30'
+              : 'bg-rift-800 border-rift-600/40 text-rift-500 hover:bg-rift-600 hover:text-rift-300'
+          }`}
+        >
+          {promo ? 'Promo' : 'Standard'}
         </button>
       </div>
         </div>

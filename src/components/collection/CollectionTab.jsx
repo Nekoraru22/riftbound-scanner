@@ -21,7 +21,7 @@ export default function CollectionTab({
         </div>
 
         {/* Action bar */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-4">
           <span className="text-sm font-semibold text-rift-100 mr-auto">
             {totalCards > 0
               ? `${totalCards} card${totalCards !== 1 ? 's' : ''} (${scannedCards.length} unique)`
@@ -31,17 +31,17 @@ export default function CollectionTab({
           <button
             onClick={onExport}
             disabled={scannedCards.length === 0}
-            className="btn-primary text-xs py-1.5 px-3 rounded-xl"
+            className="btn-primary text-xs py-2 px-4 rounded-xl"
           >
-            <Download className="w-3.5 h-3.5" />
+            <Download className="w-4 h-4" />
             CSV
           </button>
           <button
             onClick={onClearAll}
             disabled={scannedCards.length === 0}
-            className="btn-ghost text-xs py-1.5 text-red-400 hover:text-red-300 hover:bg-red-400/10 rounded-xl disabled:opacity-30"
+            className="btn-ghost text-xs py-2 px-3 text-red-400 hover:text-red-300 hover:bg-red-400/10 rounded-xl disabled:opacity-30"
           >
-            <Trash2 className="w-3.5 h-3.5" />
+            <Trash2 className="w-4 h-4" />
           </button>
         </div>
 
@@ -55,17 +55,24 @@ export default function CollectionTab({
             </p>
           </div>
         ) : (
-          <div className="space-y-2">
-            {scannedCards.map((card, index) => (
-              <ScannerCardRow
-                key={`${card.cardData.id}-${card.scanTimestamp}`}
-                card={card}
-                index={index}
-                onUpdate={onUpdateCard}
-                onRemove={onRemoveCard}
-              />
-            ))}
-          </div>
+          <>
+            <div className="space-y-2">
+              {scannedCards.map((card, index) => (
+                <ScannerCardRow
+                  key={`${card.cardData.id}-${card.scanTimestamp}`}
+                  card={card}
+                  index={index}
+                  onUpdate={onUpdateCard}
+                  onRemove={onRemoveCard}
+                />
+              ))}
+            </div>
+
+            {/* Condition abbreviations legend */}
+            <p className="text-[10px] text-rift-600 text-center pt-2">
+              NM = Near Mint · LP = Lightly Played · MP = Moderately Played · HP = Heavily Played · D = Damaged
+            </p>
+          </>
         )}
       </div>
     </div>

@@ -333,24 +333,30 @@ export default function App() {
   }, [scannedCards.length]);
 
   // Add a single card to export list (from individual add button)
-  const handleAddCardToExport = useCallback((cardData) => {
+  const handleAddCardToExport = useCallback((payload) => {
+    const cardData = payload.cardData || payload;
+    const qty = payload.quantity || 1;
+    const foilOverride = payload.foil;
+    const promoOverride = payload.promo || false;
+
     setScannedCards(prev => {
       const existingIndex = prev.findIndex(c => c.cardData.id === cardData.id);
       if (existingIndex >= 0) {
         const updated = [...prev];
         updated[existingIndex] = {
           ...updated[existingIndex],
-          quantity: updated[existingIndex].quantity + 1,
+          quantity: updated[existingIndex].quantity + qty,
         };
         return updated;
       } else {
         const defaults = batchDefaultsRef.current;
         return [...prev, {
           cardData,
-          quantity: 1,
+          quantity: qty,
           condition: defaults.condition,
           language: defaults.language,
-          foil: isFoilOnly(cardData) || defaults.foil,
+          foil: foilOverride !== undefined ? foilOverride : (isFoilOnly(cardData) || defaults.foil),
+          promo: promoOverride,
           confidence: 1,
           scanTimestamp: Date.now(),
         }];

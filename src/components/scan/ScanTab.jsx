@@ -651,29 +651,29 @@ export default function ScanTab({
               <span className="text-sm font-semibold text-gold-400 mt-1">
                 {totalPending} pending
               </span>
-              <div className="flex items-center gap-2 mt-1">
+              <div className="flex items-center gap-4 mt-1">
                 {checkedPendingIndices.size > 0 ? (
                   <button
                     onClick={(e) => { e.stopPropagation(); handleConfirmCheckedPending(); }}
-                    className="btn-primary text-[10px] py-1 px-2.5 rounded-lg"
+                    className="btn-primary text-xs py-2 px-4 rounded-lg"
                   >
-                    <ChevronsRight className="w-3 h-3" />
+                    <ChevronsRight className="w-4 h-4" />
                     Add ({checkedPendingIndices.size})
                   </button>
                 ) : (
                   <button
                     onClick={(e) => { e.stopPropagation(); onConfirmAllPending(); }}
-                    className="btn-primary text-[10px] py-1 px-2.5 rounded-lg"
+                    className="btn-primary text-xs py-2 px-4 rounded-lg"
                   >
-                    <ChevronsRight className="w-3 h-3" />
+                    <ChevronsRight className="w-4 h-4" />
                     Add all
                   </button>
                 )}
                 <button
                   onClick={(e) => { e.stopPropagation(); onClearPending(); }}
-                  className="btn-ghost text-[10px] py-1 px-1.5 rounded-lg text-red-400 hover:text-red-300 hover:bg-red-400/10"
+                  className="btn-ghost text-xs py-2 px-3 rounded-lg text-red-400 hover:text-red-300 hover:bg-red-400/10"
                 >
-                  <Trash2 className="w-3 h-3" />
+                  <Trash2 className="w-4 h-4" />
                 </button>
               </div>
             </button>
@@ -706,18 +706,18 @@ export default function ScanTab({
             {pendingCards.length > 0 && (
               <>
                 {checkedPendingIndices.size > 0 ? (
-                  <button onClick={handleConfirmCheckedPending} className="btn-primary text-[10px] py-1 px-2.5 rounded-lg">
-                    <ChevronsRight className="w-3 h-3" />
+                  <button onClick={handleConfirmCheckedPending} className="btn-primary text-xs py-2 px-4 rounded-lg">
+                    <ChevronsRight className="w-4 h-4" />
                     Add ({checkedPendingIndices.size})
                   </button>
                 ) : (
-                  <button onClick={onConfirmAllPending} className="btn-primary text-[10px] py-1 px-2.5 rounded-lg">
-                    <ChevronsRight className="w-3 h-3" />
+                  <button onClick={onConfirmAllPending} className="btn-primary text-xs py-2 px-4 rounded-lg">
+                    <ChevronsRight className="w-4 h-4" />
                     Add all
                   </button>
                 )}
-                <button onClick={onClearPending} className="btn-ghost text-[10px] py-1 px-1.5 rounded-lg text-red-400 hover:text-red-300 hover:bg-red-400/10">
-                  <Trash2 className="w-3 h-3" />
+                <button onClick={onClearPending} className="btn-ghost text-xs py-2 px-3 rounded-lg text-red-400 hover:text-red-300 hover:bg-red-400/10">
+                  <Trash2 className="w-4 h-4" />
                 </button>
               </>
             )}

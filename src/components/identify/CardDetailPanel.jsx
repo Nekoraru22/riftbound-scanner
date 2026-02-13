@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronDown, Plus, CheckSquare, Square, Trash2 } from 'lucide-react';
-import { DOMAIN_COLORS, RARITY_STYLES } from '../../data/sampleCards.js';
+import { ChevronDown, Plus, Minus, CheckSquare, Square, Trash2, Sparkles } from 'lucide-react';
+import { DOMAIN_COLORS, RARITY_STYLES, isFoilOnly } from '../../data/sampleCards.js';
 import { getCardImageUrl } from '../../lib/cardMatcher.js';
 
 /**
@@ -52,6 +52,9 @@ export default function CardDetailPanel({
   }, [isSelected]);
   const [cropSrc, setCropSrc] = useState(null);
   const [selectedMatchIdx, setSelectedMatchIdx] = useState(0);
+  const [localQuantity, setLocalQuantity] = useState(1);
+  const [localFoil, setLocalFoil] = useState(false);
+  const [localPromo, setLocalPromo] = useState(false);
 
   const matchResult = detection.matchResult;
   const hasMatch = matchResult && matchResult.similarity > 0.55;
@@ -78,6 +81,15 @@ export default function CardDetailPanel({
 
   // Resolve card data directly from match entry (contains all metadata)
   const cardData = resolveCardData(activeMatch);
+  const foilOnly = cardData ? isFoilOnly(cardData) : false;
+
+  // Reset foil and promo state when active match changes
+  useEffect(() => {
+    if (cardData) {
+      setLocalFoil(isFoilOnly(cardData));
+      setLocalPromo(false);
+    }
+  }, [activeCardId]);
 
   // Get local card image URL from card ID
   const originalImageUrl = activeMatch?.id ? getCardImageUrl(activeMatch.id) : null;
@@ -389,11 +401,71 @@ export default function CardDetailPanel({
             </div>
           )}
 
+          {/* Quantity, Foil & Promo controls */}
+          {cardData && (
+            <div className="flex items-center gap-3">
+              {/* Quantity */}
+              <div className="flex items-center gap-1">
+                <span className="text-[10px] text-rift-500 uppercase tracking-wider mr-1">Qty</span>
+                <button
+                  onClick={() => setLocalQuantity(q => Math.max(1, q - 1))}
+                  className="w-7 h-7 rounded-lg bg-rift-700 border border-rift-600/40 flex items-center justify-center text-rift-300 hover:bg-rift-600 transition-colors"
+                >
+                  <Minus className="w-3 h-3" />
+                </button>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={localQuantity}
+                  onChange={(e) => {
+                    const v = parseInt(e.target.value);
+                    if (!isNaN(v)) setLocalQuantity(Math.min(99, Math.max(1, v)));
+                  }}
+                  className="w-10 h-7 text-center text-xs font-mono bg-rift-700 border border-rift-600/40 rounded-lg text-rift-100 focus:outline-none focus:border-gold-500/60"
+                />
+                <button
+                  onClick={() => setLocalQuantity(q => Math.min(99, q + 1))}
+                  className="w-7 h-7 rounded-lg bg-rift-700 border border-rift-600/40 flex items-center justify-center text-rift-300 hover:bg-rift-600 transition-colors"
+                >
+                  <Plus className="w-3 h-3" />
+                </button>
+              </div>
+
+              {/* Foil toggle */}
+              <button
+                onClick={() => !foilOnly && setLocalFoil(f => !f)}
+                disabled={foilOnly}
+                title={foilOnly ? 'Always foil (Rare/Epic)' : localFoil ? 'Foil' : 'Standard'}
+                className={`h-7 min-w-[90px] rounded-lg border flex items-center justify-center gap-1 transition-all px-2.5 ${
+                  localFoil || foilOnly
+                    ? 'bg-purple-500/20 border-purple-400/50 text-purple-400 hover:bg-purple-500/30'
+                    : 'bg-rift-700 border-rift-600/40 text-rift-500 hover:bg-rift-600 hover:text-rift-300'
+                } ${foilOnly ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'}`}
+              >
+                <Sparkles className="w-3.5 h-3.5 flex-shrink-0" />
+                <span className="text-[10px] font-medium leading-none">{localFoil || foilOnly ? 'Foil' : 'Standard'}</span>
+              </button>
+
+              {/* Promo toggle */}
+              <button
+                onClick={() => setLocalPromo(p => !p)}
+                title={localPromo ? 'Promo' : 'Standard'}
+                className={`h-7 min-w-[90px] rounded-lg border flex items-center justify-center transition-all px-2.5 text-[10px] font-medium cursor-pointer ${
+                  localPromo
+                    ? 'bg-amber-500/20 border-amber-400/50 text-amber-400 hover:bg-amber-500/30'
+                    : 'bg-rift-700 border-rift-600/40 text-rift-500 hover:bg-rift-600 hover:text-rift-300'
+                }`}
+              >
+                {localPromo ? 'Promo' : 'Standard'}
+              </button>
+            </div>
+          )}
+
           {/* Action buttons */}
           {cardData && (
             <div className="flex gap-2">
               <button
-                onClick={() => onAddToScanner(cardData)}
+                onClick={() => onAddToScanner({ cardData, quantity: localQuantity, foil: localFoil || foilOnly, promo: localPromo })}
                 className="flex-1 py-2.5 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-all btn-primary"
               >
                 <Plus className="w-4 h-4" />
