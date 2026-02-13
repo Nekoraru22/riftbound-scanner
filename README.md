@@ -384,3 +384,5 @@ The card identification system relies on a 16x16 pixel color grid extracted from
   - Fails when cards are very close to the camera, not enough background visible
   - Fails when cards are on a big grid layout
   - Fails when cards are in sleeves (reflections, altered borders)
+- Search bar in Collection
+- Maybe cropping cards is not the best idea, i can try cropping only black borders
