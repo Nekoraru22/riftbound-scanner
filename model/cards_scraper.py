@@ -26,11 +26,44 @@ GRID_SIZE = 16 # 16x16 grid = 768 features (256 cells * 3 RGB channels)
 DCT_SIZE = 32 # 32x32 resize for DCT feature extraction
 DCT_BLOCK = 8 # 8x8 low-frequency block → 63 coefficients per channel
 
-# Artwork crop region (portrait card) — excludes frame, name bar, text/stats
-ART_TOP = 0.05
-ART_BOTTOM = 0.55
+# Artwork crop regions per card layout.
+# Standard cards (unit/spell/gear/rune) have a name bar + text box that hide ~45% of the height.
+# Legends keep more art (smaller text box), and full-art variants (-star-, alt-art) push the
+# illustration almost edge to edge. Battlefields are landscape art rotated 90° → near full-frame.
 ART_LEFT = 0.05
 ART_RIGHT = 0.95
+ART_TOP = 0.05
+ART_REGIONS = {
+    "standard": (0.05, 0.55),  # unit, spell, gear, rune
+    "legend": (0.05, 0.85),
+    "fullart": (0.05, 0.95),   # star / alt-art / battlefields (rotated)
+}
+# Backwards-compatible default bottom (used by helpers that don't know the type).
+ART_BOTTOM = ART_REGIONS["standard"][1]
+
+# Variant suffix in IDs that identifies full-art / alt-art cards.
+# Examples: ogn-066a-298, sfd-227-star-221, ogn-304-star-298, unl-230-star-219.
+_FULLART_ID_RE = re.compile(r"-\d+a-|-star-")
+
+
+def _resolve_art_region(card_type: str, card_id: str) -> tuple[float, float]:
+    """
+    Returns the (top, bottom) artwork crop bounds for a given card.
+
+    Arguments:
+        card_type: The card_type from the DB (e.g. 'unit', 'legend', 'battlefield').
+        card_id: The card id, used to detect alt-art / star variants.
+
+    Returns:
+        A tuple of (top, bottom) normalized crop bounds.
+    """
+    if card_id and _FULLART_ID_RE.search(card_id):
+        return ART_REGIONS["fullart"]
+    if card_type == "battlefield":
+        return ART_REGIONS["fullart"]
+    if card_type == "legend":
+        return ART_REGIONS["legend"]
+    return ART_REGIONS["standard"]
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -416,22 +449,26 @@ def download_images(cards: list[dict]) -> None:
     print(f"Download complete. Total: {len(cards_to_download)}, Failed: {failed}")
 
 
-def _crop_artwork(image: np.ndarray) -> np.ndarray:
+def _crop_artwork(image: np.ndarray, top: float = ART_TOP, bottom: float = ART_BOTTOM) -> np.ndarray:
     """
     Crop to the artwork region of a portrait card image.
 
     Excludes the shared frame, name bar, text box and stats so that
     features are computed only on the discriminative illustration.
+    The vertical bounds are passed in to support per-card-type layouts
+    (standard / legend / full-art).
 
     Arguments:
         image: BGR image (from cv2.imread), assumed portrait orientation.
+        top: Normalized top edge of the crop (0-1).
+        bottom: Normalized bottom edge of the crop (0-1).
 
     Returns:
         Cropped BGR image containing only the artwork region.
     """
     h, w = image.shape[:2]
-    sy = round(h * ART_TOP)
-    ey = round(h * ART_BOTTOM)
+    sy = round(h * top)
+    ey = round(h * bottom)
     sx = round(w * ART_LEFT)
     ex = round(w * ART_RIGHT)
     return image[sy:ey, sx:ex].copy()
@@ -539,7 +576,8 @@ def generate_card_hashes() -> None:
             skipped += 1
             continue
 
-        art = _crop_artwork(img)
+        art_top, art_bottom = _resolve_art_region(row["card_type"], row["id"])
+        art = _crop_artwork(img, top=art_top, bottom=art_bottom)
         features = _compute_color_grid(art)
         dct_features = _compute_dct_features(art)
 
@@ -576,6 +614,9 @@ def generate_card_hashes() -> None:
             "text": row["text"],
             "orientation": row["orientation"],
             "imageUrl": row["image_url"],
+            # artBottom = normalized bottom of the crop used for this card's features.
+            # The frontend matcher uses this to compute the matching query crop per candidate.
+            "artBottom": round(art_bottom, 3),
             "f": features,
             "d": dct_features,
         })

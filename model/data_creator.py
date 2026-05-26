@@ -26,13 +26,13 @@ DISTRACTORS_DIR = os.path.join(BASE_DIR, "distractors")
 
 # Dataset generation settings
 IMAGES_PER_CARD = 150
-OUTPUT_SIZE = 640
+OUTPUT_SIZE = 768
 MAX_CARDS_PER_IMAGE = 5
 TRAIN_RATIO = 0.85
 
 # Card placement settings
-CARD_SCALE_MIN = 0.12
-CARD_SCALE_MAX = 0.60
+CARD_SCALE_MIN = 0.10
+CARD_SCALE_MAX = 0.95  # cards can now fill almost the entire frame
 ROTATION_RANGE = (-75, 75)
 
 # Augmentation probabilities
@@ -48,7 +48,9 @@ MOTION_BLUR_PROB = 0.15
 JPEG_ARTIFACT_PROB = 0.25
 CUTOUT_PROB = 0.15
 MOSAIC_PROB = 0.25
-GRID_PROB = 0.15
+GRID_PROB = 0.25       # bigger share of grid layouts (was 0.15)
+CLOSEUP_PROB = 0.15    # single card filling >70% of the frame, possibly clipped
+SLEEVE_PROB = 0.30     # sleeve overlay (glare, specular, colored border) per card
 DISTRACTOR_PROB = 0.4
 HORIZONTAL_FLIP_PROB = 0.5
 VIGNETTE_PROB = 0.3
@@ -427,6 +429,92 @@ def rotate_point(x: float, y: float, cx: float, cy: float, angle_rad: float) -> 
     dx, dy = x - cx, y - cy
     cos_a, sin_a = math.cos(angle_rad), math.sin(angle_rad)
     return cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a
+
+
+def apply_sleeve_overlay(card_img: np.ndarray) -> np.ndarray:
+    """
+    Simulates a card sleeve overlay: colored border, plastic glare and specular highlights.
+
+    The function operates on the unrotated card image. The card is kept inside
+    the original canvas — a colored frame is drawn over the card edges, then a
+    diagonal glare streak and small specular spots are blended on top of the
+    artwork. This trains the YOLO model to keep detecting cards even when the
+    border and surface look different from the raw scans.
+
+    Arguments:
+        card_img: BGR or BGRA card image.
+
+    Returns:
+        The card image with the sleeve effect applied (same shape/channels).
+    """
+    h, w = card_img.shape[:2]
+
+    # Ensure BGRA so we can preserve any existing alpha
+    if card_img.shape[2] == 3:
+        alpha = np.full((h, w, 1), 255, dtype=np.uint8)
+        card_img = np.concatenate([card_img, alpha], axis=2)
+
+    rgb = card_img[:, :, :3].astype(np.float32)
+    alpha = card_img[:, :, 3:4].astype(np.float32) / 255.0
+
+    # 1) Colored sleeve border (semi-transparent, follows card edges).
+    border_thickness = max(2, int(min(w, h) * random.uniform(0.012, 0.030)))
+    border_color = np.array([
+        random.randint(0, 255), random.randint(0, 255), random.randint(0, 255),
+    ], dtype=np.float32)
+    # Bias toward neutrals & blues (most common sleeves) half the time
+    if random.random() < 0.5:
+        gray = random.randint(0, 90)
+        border_color = np.array([gray + random.randint(-10, 10),
+                                 gray + random.randint(-10, 10),
+                                 gray + random.randint(-10, 10)], dtype=np.float32)
+        border_color = np.clip(border_color, 0, 255)
+
+    border_mask = np.zeros((h, w), dtype=np.float32)
+    border_mask[:border_thickness, :] = 1.0
+    border_mask[-border_thickness:, :] = 1.0
+    border_mask[:, :border_thickness] = 1.0
+    border_mask[:, -border_thickness:] = 1.0
+    # Slight blur so the sleeve edge isn't perfectly sharp
+    border_mask = cv2.GaussianBlur(border_mask, (5, 5), 0)
+    border_strength = random.uniform(0.6, 1.0)
+    bm = (border_mask * border_strength)[:, :, np.newaxis]
+    rgb = rgb * (1 - bm) + border_color[None, None, :] * bm
+
+    # 2) Diagonal glare streak (bright, soft, partially transparent).
+    if random.random() < 0.75:
+        glare = np.zeros((h, w), dtype=np.float32)
+        angle = random.uniform(-30, 30)  # near-vertical streak
+        streak_w = int(w * random.uniform(0.08, 0.22))
+        cx = random.randint(int(w * 0.2), int(w * 0.8))
+        pts = np.array([
+            [cx - streak_w, 0], [cx + streak_w, 0],
+            [cx + streak_w + int(h * math.tan(math.radians(angle))), h],
+            [cx - streak_w + int(h * math.tan(math.radians(angle))), h],
+        ], dtype=np.int32)
+        cv2.fillPoly(glare, [pts], 1.0)
+        glare = cv2.GaussianBlur(glare, (51, 51), 0)
+        glare /= max(glare.max(), 1e-6)
+        glare_strength = random.uniform(0.25, 0.55)
+        gm = (glare * glare_strength)[:, :, np.newaxis]
+        rgb = rgb * (1 - gm) + 255.0 * gm
+
+    # 3) Specular highlights (a couple of soft bright spots).
+    for _ in range(random.randint(0, 3)):
+        sx = random.randint(0, w - 1)
+        sy = random.randint(0, h - 1)
+        radius = random.randint(max(4, w // 40), max(8, w // 12))
+        spot = np.zeros((h, w), dtype=np.float32)
+        cv2.circle(spot, (sx, sy), radius, 1.0, -1)
+        spot = cv2.GaussianBlur(spot, (radius * 2 + 1, radius * 2 + 1), 0)
+        spot /= max(spot.max(), 1e-6)
+        strength = random.uniform(0.15, 0.45)
+        sm = (spot * strength)[:, :, np.newaxis]
+        rgb = rgb * (1 - sm) + 255.0 * sm
+
+    rgb = np.clip(rgb, 0, 255)
+    out = np.concatenate([rgb, (alpha * 255).astype(np.float32)], axis=2).astype(np.uint8)
+    return out
 
 
 def apply_perspective(card_img: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -989,9 +1077,10 @@ def place_card_on_bg(
         fy = (rc[1] + off_y) / h_bg
         final_corners.append((fx, fy))
 
-    # Verify corners are mostly inside the image
+    # Verify enough of the card is visible. Allow clipping (e.g. close-ups at scale > 1
+    # or cards on the edge of large grids) as long as at least 2 corners are in-frame.
     inside = sum(1 for fx, fy in final_corners if 0 <= fx <= 1 and 0 <= fy <= 1)
-    if inside < 3:
+    if inside < 2:
         return bg, None
 
     # Clamp corners to valid range
@@ -1024,6 +1113,9 @@ def _place_single_card(
     card_img = cv2.imread(card_path, cv2.IMREAD_UNCHANGED)
     if card_img is None:
         return bg, None, (0.0, 0.0)
+
+    if random.random() < SLEEVE_PROB:
+        card_img = apply_sleeve_overlay(card_img)
 
     angle = random.uniform(*ROTATION_RANGE)
     scale = random.uniform(CARD_SCALE_MIN, CARD_SCALE_MAX)
@@ -1061,14 +1153,19 @@ def generate_grid_image(card_paths: list[str]) -> tuple[np.ndarray, list[str]]:
     bg = generate_random_background(OUTPUT_SIZE)
     bg = add_lighting_gradient(bg)
 
-    rows, cols = random.choice([(2, 2), (2, 3), (3, 3)])
+    # Mix of small and large grids — larger grids force tiny per-card scales,
+    # which is exactly the regime the model previously failed at.
+    rows, cols = random.choice([
+        (2, 2), (2, 3), (3, 3),
+        (3, 4), (4, 4), (4, 5), (5, 5), (5, 6),
+    ])
     n_cards = rows * cols
     selected = random.sample(card_paths, min(n_cards, len(card_paths)))
 
     # Card size: fit grid into ~85% of the image
-    margin = 0.075
+    margin = 0.05 if max(rows, cols) >= 4 else 0.075
     usable = 1.0 - 2 * margin
-    gap = random.uniform(0.01, 0.03)
+    gap = random.uniform(0.005, 0.025)
     card_w = (usable - gap * (cols - 1)) / cols
     card_h = (usable - gap * (rows - 1)) / rows
     scale = min(card_w, card_h * 0.72)  # cards are taller than wide (~1.39 ratio)
@@ -1085,6 +1182,9 @@ def generate_grid_image(card_paths: list[str]) -> tuple[np.ndarray, list[str]]:
             idx += 1
             if card_img is None:
                 continue
+
+            if random.random() < SLEEVE_PROB:
+                card_img = apply_sleeve_overlay(card_img)
 
             # Grid position with slight jitter
             px = margin + c * (scale + gap) + scale / 2 + random.uniform(-0.01, 0.01)
@@ -1105,6 +1205,70 @@ def generate_grid_image(card_paths: list[str]) -> tuple[np.ndarray, list[str]]:
     if random.random() < SHADOW_PROB:
         for corners in card_corners_for_shadows:
             bg = add_card_shadow(bg, corners)
+
+    bg = augment_color(bg)
+    bg = add_vignette(bg)
+    bg = apply_motion_blur(bg)
+    bg = apply_jpeg_artifacts(bg)
+
+    return bg, labels
+
+
+def generate_closeup_image(card_paths: list[str]) -> tuple[np.ndarray, list[str]]:
+    """
+    Generates an image with a single card filling most of the frame.
+
+    Picks a scale between 0.85 and 1.30 of the frame height. When the scale
+    exceeds 1.0 the card is intentionally placed so a corner gets clipped by
+    the image edge — this teaches the YOLO model to keep detecting cards that
+    are too close to the camera to fit fully in view (one of the failure modes
+    listed in the README TODO).
+
+    Arguments:
+        card_paths: List of absolute paths to card images.
+
+    Returns:
+        A tuple of (image, labels) where labels is a list of OBB
+        label strings in YOLO format.
+    """
+    bg = generate_random_background(OUTPUT_SIZE)
+    bg = add_lighting_gradient(bg)
+    bg = add_distractor_objects(bg)
+
+    card_path = random.choice(card_paths)
+    card_img = cv2.imread(card_path, cv2.IMREAD_UNCHANGED)
+    if card_img is None:
+        # Fallback to a regular image to avoid producing an empty sample
+        return generate_image(card_paths, use_mosaic=False)
+
+    if random.random() < SLEEVE_PROB:
+        card_img = apply_sleeve_overlay(card_img)
+
+    # Scale > 1 means the card is taller than the frame → clipped by edges.
+    scale = random.uniform(0.85, 1.30)
+    angle = random.uniform(-25, 25)  # closeups rarely have extreme rotation
+    flip = random.random() < HORIZONTAL_FLIP_PROB
+
+    # Bias position toward edges when oversized, otherwise keep it centered-ish.
+    if scale > 1.0:
+        # Push the center past the image boundary so a corner is clipped
+        margin = 0.15
+        px = random.choice([random.uniform(-margin, 0.4), random.uniform(0.6, 1 + margin)])
+        py = random.uniform(0.25, 0.75) if random.random() < 0.5 else random.choice(
+            [random.uniform(-margin, 0.4), random.uniform(0.6, 1 + margin)]
+        )
+    else:
+        px = random.uniform(0.4, 0.6)
+        py = random.uniform(0.4, 0.6)
+
+    bg, corners = place_card_on_bg(bg, card_img, angle, scale, px, py, flip)
+
+    labels: list[str] = []
+    if corners is not None:
+        if random.random() < SHADOW_PROB:
+            bg = add_card_shadow(bg, corners)
+        coords = " ".join(f"{c[0]:.6f} {c[1]:.6f}" for c in corners)
+        labels.append(f"0 {coords}")
 
     bg = augment_color(bg)
     bg = add_vignette(bg)
@@ -1136,6 +1300,9 @@ def generate_image(card_paths: list[str], use_mosaic: bool = False) -> tuple[np.
 
     if random.random() < GRID_PROB:
         return generate_grid_image(card_paths)
+
+    if random.random() < CLOSEUP_PROB:
+        return generate_closeup_image(card_paths)
 
     bg = generate_random_background(OUTPUT_SIZE)
 
@@ -1213,6 +1380,9 @@ def _fill_mosaic_quadrant(
         card_img = cv2.imread(card_path, cv2.IMREAD_UNCHANGED)
         if card_img is None:
             continue
+
+        if random.random() < SLEEVE_PROB:
+            card_img = apply_sleeve_overlay(card_img)
 
         angle = random.uniform(*ROTATION_RANGE)
         scale = random.uniform(0.25, 0.65)

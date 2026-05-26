@@ -500,6 +500,12 @@ export default function CardDetailPanel({
                 <div className="max-h-[120px] sm:max-h-[200px] overflow-y-auto space-y-1 rounded-lg bg-rift-700/30 p-1.5">
                   {searchResults.map((card) => {
                     const ds = DOMAIN_COLORS[card.domain] || DOMAIN_COLORS.colorless;
+                    // Extract collector number with variant suffix (e.g. "119a", "227-star")
+                    // so regular + alt-art entries that share a name are distinguishable.
+                    const codeStr = (card.code || '').split('/')[0];
+                    const num = codeStr.includes('-')
+                      ? codeStr.split('-').slice(1).join('-')
+                      : String(card.number).padStart(3, '0');
                     return (
                       <button
                         key={card.id}
@@ -508,7 +514,7 @@ export default function CardDetailPanel({
                       >
                         <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: ds.hex }} />
                         <span className="text-xs text-rift-100 truncate flex-1">{card.name}</span>
-                        <span className="text-[10px] text-rift-400 flex-shrink-0">[{card.set}]</span>
+                        <span className="text-[10px] text-rift-400 flex-shrink-0 font-mono">{card.set} · #{num}</span>
                       </button>
                     );
                   })}

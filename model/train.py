@@ -240,7 +240,7 @@ def export_model_fn():
     subprocess.run(
         [sys.executable, "-c",
          f"from ultralytics import YOLO; "
-         f"YOLO('{best_path}').export(format='tfjs', imgsz=640, device='cpu', opset=12)"],
+         f"YOLO('{best_path}').export(format='tfjs', imgsz=768, device='cpu', opset=12)"],
         env=env,
         check=True,
     )
@@ -250,7 +250,7 @@ def export_model_fn():
     subprocess.run(
         [sys.executable, "-c",
          f"from ultralytics import YOLO; "
-         f"YOLO('{best_path}').export(format='onnx', imgsz=640, opset=12, simplify=True, dynamic=False, device='cpu')"],
+         f"YOLO('{best_path}').export(format='onnx', imgsz=768, opset=12, simplify=True, dynamic=False, device='cpu')"],
         env=env,
         check=True,
     )
@@ -261,8 +261,8 @@ def export_model_fn():
 
 @app.function(
     image=image,
-    gpu="A10G",
-    timeout=18000,
+    gpu="A100",
+    timeout=21600,
     volumes={"/data": volume},
 )
 def train_model():
@@ -320,17 +320,20 @@ def train_model():
     model = YOLO("yolo11n-obb.pt")
     model.train(
         data=yaml_path,
-        epochs=20,
-        imgsz=640,
-        batch=64,
+        epochs=60,
+        imgsz=768,
+        batch=48,             # A100 has 40-80GB, fits 48 at 768
         device=0,
         task="obb",
         project=REMOTE_RUNS_DIR,
         name="train",
         exist_ok=True,
+        patience=20,          # early-stop if val plateaus
         hsv_v=0.6,
         mixup=0.2,
         degrees=15,
+        close_mosaic=10,      # disable mosaic in the last 10 epochs for cleaner final fit
+        cos_lr=True,          # cosine LR schedule plays well with longer runs
     )
 
     # Export to both TensorFlow.js and ONNX in a subprocess with GPU hidden.
@@ -348,7 +351,7 @@ def train_model():
     subprocess.run(
         [sys.executable, "-c",
          f"from ultralytics import YOLO; "
-         f"YOLO('{best_path}').export(format='tfjs', imgsz=640, device='cpu', opset=12)"],
+         f"YOLO('{best_path}').export(format='tfjs', imgsz=768, device='cpu', opset=12)"],
         env=env,
         check=True,
     )
@@ -358,7 +361,7 @@ def train_model():
     subprocess.run(
         [sys.executable, "-c",
          f"from ultralytics import YOLO; "
-         f"YOLO('{best_path}').export(format='onnx', imgsz=640, opset=12, simplify=True, dynamic=False, device='cpu')"],
+         f"YOLO('{best_path}').export(format='onnx', imgsz=768, opset=12, simplify=True, dynamic=False, device='cpu')"],
         env=env,
         check=True,
     )

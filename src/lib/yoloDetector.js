@@ -34,9 +34,13 @@ class YOLODetector {
     this.model = null;
     this.onnxSession = null;
     this.state = DetectorState.UNLOADED;
-    this.inputSize = 640; // YOLO11 default input size
+    this.inputSize = 768; // matches training imgsz
     this.confidenceThreshold = 0.6;
     this.iouThreshold = 0.45;
+    // Minimum Laplacian variance for a crop to be considered "sharp enough"
+    // to identify. Out-of-focus background cards typically score < 50;
+    // well-focused cards score > 300. 100 is a conservative middle ground.
+    this.sharpnessThreshold = 100;
     this.useSimulation = true; // Toggle for demo mode
     this.modelFormat = 'onnx'; // 'onnx' or 'tfjs'
     this.modelPreference = 'quantized'; // 'normal' or 'quantized'
@@ -210,10 +214,12 @@ class YOLODetector {
     const output = results.output0 || results[Object.keys(results)[0]];
     const outputData = output.data;
 
-    // Post-process OBB outputs
-    // YOLO11 OBB output shape: [1, 6, 8400] (transposed)
+    // Post-process OBB outputs.
+    // YOLO11 OBB single-class output shape: [1, 6, N] where N depends on imgsz
+    // (8400 at 640, 12096 at 768, …). Derive N from the tensor instead of
+    // hardcoding so the same code works across image sizes.
     const detections = [];
-    const numDetections = 8400;
+    const numDetections = output.dims ? output.dims[output.dims.length - 1] : outputData.length / 6;
 
     for (let i = 0; i < numDetections; i++) {
       const conf = outputData[4 * numDetections + i];
@@ -236,7 +242,7 @@ class YOLODetector {
       }
     }
 
-    return this._nmsOBB(detections);
+    return this._filterByFocus(this._nmsOBB(detections));
   }
 
   /**
@@ -271,15 +277,16 @@ class YOLODetector {
     const predictions = await this.model.predict(tensor);
     tensor.dispose();
 
-    // Post-process OBB outputs
-    // YOLO11 OBB output shape: [1, 6, 8400] (transposed)
+    // Post-process OBB outputs.
+    // YOLO11 OBB single-class output shape: [1, 6, N] where N depends on imgsz
+    // (8400 at 640, 12096 at 768, …). Derive N from the tensor shape.
     // 6 channels = [cx, cy, w, h, class_score, angle] (nc=1)
-    // 8400 = number of candidate detections
+    const predShape = predictions.shape;
     const outputData = await predictions.data();
     predictions.dispose();
 
     const detections = [];
-    const numDetections = 8400;
+    const numDetections = predShape ? predShape[predShape.length - 1] : outputData.length / 6;
 
     for (let i = 0; i < numDetections; i++) {
       // Data is laid out as [ch0_det0, ch0_det1, ..., ch1_det0, ch1_det1, ...]
@@ -304,7 +311,7 @@ class YOLODetector {
       }
     }
 
-    return this._nmsOBB(detections);
+    return this._filterByFocus(this._nmsOBB(detections));
   }
 
   /**
@@ -430,6 +437,51 @@ class YOLODetector {
     canvas.height = Math.round(h);
     canvas.getContext('2d').drawImage(big, bcx - w / 2, bcy - h / 2, w, h, 0, 0, w, h);
     return canvas;
+  }
+
+  /**
+   * Drop detections whose crop is too out-of-focus to identify reliably.
+   * Uses Laplacian variance on a 64×64 grayscale downsample — cheap and a
+   * reliable proxy for "how much edge detail is in this image".
+   */
+  _filterByFocus(detections) {
+    if (this.sharpnessThreshold <= 0) return detections;
+    return detections.filter(d => this._laplacianVariance(d.cropCanvas) >= this.sharpnessThreshold);
+  }
+
+  _laplacianVariance(cropCanvas) {
+    if (!this._sharpCanvas) this._sharpCanvas = document.createElement('canvas');
+    const N = 64;
+    this._sharpCanvas.width = N;
+    this._sharpCanvas.height = N;
+    const ctx = this._sharpCanvas.getContext('2d');
+    ctx.drawImage(cropCanvas, 0, 0, N, N);
+    const data = ctx.getImageData(0, 0, N, N).data;
+
+    // Grayscale (Rec. 601 luma)
+    const gray = new Float32Array(N * N);
+    for (let i = 0; i < N * N; i++) {
+      gray[i] = 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2];
+    }
+
+    // 3×3 Laplacian kernel: [0,1,0; 1,-4,1; 0,1,0]
+    let sum = 0;
+    let sumSq = 0;
+    let count = 0;
+    for (let y = 1; y < N - 1; y++) {
+      for (let x = 1; x < N - 1; x++) {
+        const lap = -4 * gray[y * N + x]
+                  + gray[(y - 1) * N + x]
+                  + gray[(y + 1) * N + x]
+                  + gray[y * N + x - 1]
+                  + gray[y * N + x + 1];
+        sum += lap;
+        sumSq += lap * lap;
+        count++;
+      }
+    }
+    const mean = sum / count;
+    return sumSq / count - mean * mean;
   }
 
   /**

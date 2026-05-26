@@ -8,6 +8,7 @@ import CardDetailPanel from '../identify/CardDetailPanel.jsx';
 import { getDetector } from '../../lib/yoloDetector.js';
 import { getMatcher } from '../../lib/cardMatcher.js';
 import { downloadCSV, validateForExport } from '../../lib/csvExporter.js';
+import { warpQuadToPortrait } from '../../lib/perspectiveCrop.js';
 
 // --- Card matching utilities ---
 
@@ -29,24 +30,68 @@ function equalizeHistogram(data) {
   }
 }
 
-function computeColorGrid(canvas, gridSize) {
-  // Equalize at full resolution first (matches Python pipeline)
-  const w = canvas.width, h = canvas.height;
-  const eq = document.createElement('canvas');
-  eq.width = w;
-  eq.height = h;
+// Pooled work canvases — reused across every identifyCard / computeColorGrid call.
+// Allocating fresh canvases per crop ate hundreds of MB on multi-card uploads and
+// killed the tab. We resize these in place instead.
+let _eqCanvas = null;
+let _tmpCanvas = null;
+let _flipCanvas = null;
+
+function _getEqCanvas() {
+  if (!_eqCanvas) _eqCanvas = document.createElement('canvas');
+  return _eqCanvas;
+}
+
+function _getTmpCanvas(size) {
+  if (!_tmpCanvas) {
+    _tmpCanvas = document.createElement('canvas');
+  }
+  if (_tmpCanvas.width !== size || _tmpCanvas.height !== size) {
+    _tmpCanvas.width = size;
+    _tmpCanvas.height = size;
+  }
+  return _tmpCanvas;
+}
+
+function _getFlippedCanvas(srcCanvas) {
+  if (!_flipCanvas) _flipCanvas = document.createElement('canvas');
+  if (_flipCanvas.width !== srcCanvas.width || _flipCanvas.height !== srcCanvas.height) {
+    _flipCanvas.width = srcCanvas.width;
+    _flipCanvas.height = srcCanvas.height;
+  }
+  const ctx = _flipCanvas.getContext('2d');
+  ctx.setTransform(-1, 0, 0, 1, srcCanvas.width, 0);
+  ctx.drawImage(srcCanvas, 0, 0);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  return _flipCanvas;
+}
+
+/**
+ * Crops the artwork region from `srcCanvas` (using the per-card `bottom`),
+ * equalizes the per-channel histogram in place, and returns the gridSize × gridSize
+ * color grid feature vector. Uses pooled canvases to avoid leaking memory.
+ */
+function cropAndComputeGrid(srcCanvas, bottom, gridSize) {
+  const sw = Math.round(srcCanvas.width * (ART_RIGHT - ART_LEFT));
+  const sh = Math.round(srcCanvas.height * (bottom - ART_TOP));
+  const sx = Math.round(srcCanvas.width * ART_LEFT);
+  const sy = Math.round(srcCanvas.height * ART_TOP);
+
+  const eq = _getEqCanvas();
+  if (eq.width !== sw || eq.height !== sh) {
+    eq.width = sw;
+    eq.height = sh;
+  }
   const eqCtx = eq.getContext('2d');
-  eqCtx.drawImage(canvas, 0, 0);
-  const fullData = eqCtx.getImageData(0, 0, w, h);
+  eqCtx.drawImage(srcCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
+  const fullData = eqCtx.getImageData(0, 0, sw, sh);
   equalizeHistogram(fullData.data);
   eqCtx.putImageData(fullData, 0, 0);
 
-  // Resize equalized image to grid
-  const tmp = document.createElement('canvas');
-  tmp.width = gridSize;
-  tmp.height = gridSize;
-  tmp.getContext('2d').drawImage(eq, 0, 0, gridSize, gridSize);
-  const data = tmp.getContext('2d').getImageData(0, 0, gridSize, gridSize).data;
+  const tmp = _getTmpCanvas(gridSize);
+  const tctx = tmp.getContext('2d');
+  tctx.drawImage(eq, 0, 0, gridSize, gridSize);
+  const data = tctx.getImageData(0, 0, gridSize, gridSize).data;
   const features = new Float32Array(gridSize * gridSize * 3);
   for (let i = 0, j = 0; i < data.length; i += 4) {
     features[j++] = data[i] / 255;
@@ -110,40 +155,46 @@ function cropRotated(img, cx, cy, w, h, angle) {
   return c;
 }
 
-// Artwork crop region (portrait card) — excludes frame, name bar, text/stats
+// Artwork crop region (portrait card) — excludes frame, name bar, text/stats.
+// `bottom` is per-card (0.55 standard / 0.85 legend / 0.95 full-art).
 const ART_TOP = 0.05;
-const ART_BOTTOM = 0.55;
 const ART_LEFT = 0.05;
 const ART_RIGHT = 0.95;
-
-function cropArtwork(canvas) {
-  const w = canvas.width, h = canvas.height;
-  const sx = Math.round(w * ART_LEFT);
-  const sy = Math.round(h * ART_TOP);
-  const sw = Math.round(w * (ART_RIGHT - ART_LEFT));
-  const sh = Math.round(h * (ART_BOTTOM - ART_TOP));
-  const c = document.createElement('canvas');
-  c.width = sw;
-  c.height = sh;
-  c.getContext('2d').drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
-  return c;
-}
+const ART_BOTTOM_DEFAULT = 0.55;
 
 function identifyCard(cropCanvas, matcher) {
   if (!matcher || !matcher.cards || matcher.cards.length === 0) return null;
 
-  const art = cropArtwork(cropCanvas);
-  const artRotated = cropArtwork(rotateCanvas90(cropCanvas));
+  const rotated = rotateCanvas90(cropCanvas);
+  const flipped = _getFlippedCanvas(cropCanvas);
+  const bottoms = matcher.uniqueArtBottoms?.length
+    ? matcher.uniqueArtBottoms
+    : [ART_BOTTOM_DEFAULT];
 
-  const featNormal = computeColorGrid(art, matcher.gridSize);
-  const featRotated = computeColorGrid(artRotated, matcher.gridSize);
+  // Precompute one query feature per distinct artBottom across 3 orientations:
+  //   normal, 90° rotated (landscape battlefields), horizontal flip (mirror photos).
+  // Each candidate card is matched against the query that matches its layout,
+  // and we keep the max similarity across orientations. Pooled canvases inside.
+  const featNormal = new Map();
+  const featRotated = new Map();
+  const featFlipped = new Map();
+  for (const b of bottoms) {
+    featNormal.set(b, cropAndComputeGrid(cropCanvas, b, matcher.gridSize));
+    featRotated.set(b, cropAndComputeGrid(rotated, b, matcher.gridSize));
+    featFlipped.set(b, cropAndComputeGrid(flipped, b, matcher.gridSize));
+  }
+  const fallback = bottoms[0];
 
-  // Pure color grid ranking (most reliable for real photos)
   const ranked = [];
   for (const c of matcher.cards) {
-    const s1 = cosineSimilarity(featNormal, c.f);
-    const s2 = cosineSimilarity(featRotated, c.f);
-    ranked.push({ card: c, sim: Math.max(s1, s2) });
+    const b = typeof c.artBottom === 'number' ? c.artBottom : fallback;
+    const qn = featNormal.get(b) ?? featNormal.get(fallback);
+    const qr = featRotated.get(b) ?? featRotated.get(fallback);
+    const qf = featFlipped.get(b) ?? featFlipped.get(fallback);
+    const s1 = cosineSimilarity(qn, c.f);
+    const s2 = cosineSimilarity(qr, c.f);
+    const s3 = cosineSimilarity(qf, c.f);
+    ranked.push({ card: c, sim: Math.max(s1, s2, s3) });
   }
   ranked.sort((a, b) => b.sim - a.sim);
 
@@ -505,6 +556,44 @@ export default function ScanTab({
     });
   }, []);
 
+  // The user dragged the 4 corners of a detection. Re-warp the original
+  // full-resolution image through those corners and re-run the matcher with
+  // the new crop. Updates the detection in place so the side panel refreshes.
+  const handleCornersChange = useCallback((detectionIndex, newCorners) => {
+    const original = originalImageRef.current || uploadedImage;
+    if (!original) return;
+    setDetections(prev => {
+      const det = prev[detectionIndex];
+      if (!det) return prev;
+      // The canvas reports coords in the resized-image space (uploadedImage),
+      // but the warp samples from the original full-res image — scale corners.
+      const origW = original.naturalWidth || original.width;
+      const dispW = uploadedImage.naturalWidth || uploadedImage.width;
+      const scale = origW / dispW;
+      const srcCorners = newCorners.map(([x, y]) => [x * scale, y * scale]);
+      let crop;
+      try {
+        crop = warpQuadToPortrait(original, srcCorners);
+      } catch (err) {
+        console.error('[ScanTab] Perspective warp failed:', err);
+        return prev;
+      }
+      const matcher = getMatcher();
+      const matchResult = matcher.ready ? identifyCard(crop, matcher) : null;
+      const updated = [...prev];
+      updated[detectionIndex] = {
+        ...det,
+        // Store the edited corners so the canvas keeps drawing the new shape.
+        corners: newCorners,
+        cropCanvas: crop,
+        matchResult,
+        // Drop any previously selected manual override — let the new top-1 win.
+        activeCardId: undefined,
+      };
+      return updated;
+    });
+  }, [uploadedImage]);
+
   // --- Shared JSX ---
 
   const matchedCount = detections.filter(d => d.matchResult && d.matchResult.similarity > 0.55).length;
@@ -815,6 +904,7 @@ export default function ScanTab({
                 detections={detections}
                 selectedIndex={selectedDetection}
                 onSelectDetection={(idx) => setSelectedDetection(idx)}
+                onCornersChange={handleCornersChange}
               />
 
               {isProcessing && (

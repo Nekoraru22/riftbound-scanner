@@ -18,7 +18,25 @@ const CSV_HEADERS = [
   'Condition',
   'Language',
   'Finish',
+  'Runes',
+  'Type',
+  'Rarity',
 ];
+
+function titleCase(value) {
+  if (!value) return '';
+  return String(value).charAt(0).toUpperCase() + String(value).slice(1).toLowerCase();
+}
+
+function formatRunes(cardData) {
+  let list = [];
+  if (Array.isArray(cardData?.domains) && cardData.domains.length > 0) {
+    list = cardData.domains;
+  } else if (cardData?.domain) {
+    list = [cardData.domain];
+  }
+  return list.map(titleCase).join('/');
+}
 
 /**
  * Escape a CSV field (handle commas, quotes, newlines)
@@ -62,6 +80,9 @@ export function generateCSV(cards) {
       escapeCSV(card.condition || 'Near Mint'),
       escapeCSV(card.language || 'English'),
       card.foil ? 'Foil' : 'Standard',
+      escapeCSV(formatRunes(card.cardData)),
+      escapeCSV(titleCase(card.cardData.type)),
+      escapeCSV(titleCase(card.cardData.rarity)),
     ];
     lines.push(row.join(','));
   }
