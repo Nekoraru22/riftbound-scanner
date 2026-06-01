@@ -450,19 +450,26 @@ export default function ScanTab({
       const matcher = getMatcher();
       const results = [];
       for (const det of rawDetections) {
-        const crop = cropRotated(
-          originalImage,
-          det.box.cx * cropScale,
-          det.box.cy * cropScale,
-          det.box.w * cropScale,
-          det.box.h * cropScale,
-          det.box.angle
-        );
+        let crop;
+        if (det.keypoints?.length === 4) {
+          const scaledKps = det.keypoints.map(([x, y]) => [x * cropScale, y * cropScale]);
+          crop = warpQuadToPortrait(originalImage, scaledKps);
+        } else {
+          crop = cropRotated(
+            originalImage,
+            det.box.cx * cropScale,
+            det.box.cy * cropScale,
+            det.box.w * cropScale,
+            det.box.h * cropScale,
+            det.box.angle ?? 0
+          );
+        }
         let matchResult = null;
         if (matcher.ready) matchResult = identifyCard(crop, matcher);
         results.push({
           cx: det.box.cx, cy: det.box.cy, w: det.box.w, h: det.box.h,
-          angle: det.box.angle, confidence: det.confidence, cropCanvas: crop, matchResult,
+          corners: det.keypoints || null,
+          confidence: det.confidence, cropCanvas: crop, matchResult,
         });
       }
 

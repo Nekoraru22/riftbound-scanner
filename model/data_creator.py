@@ -44,15 +44,19 @@ NOISE_PROB = 0.35
 BLUR_PROB = 0.25
 PERSPECTIVE_PROB = 0.5
 SHADOW_PROB = 0.7
-MOTION_BLUR_PROB = 0.15
-JPEG_ARTIFACT_PROB = 0.25
+# Edge-degrading augmentations kept low: they hurt the pose keypoint signal
+# the model needs to predict tight, pixel-accurate card corners.
+MOTION_BLUR_PROB = 0.05
+JPEG_ARTIFACT_PROB = 0.10
 CUTOUT_PROB = 0.15
 MOSAIC_PROB = 0.25
 GRID_PROB = 0.25       # bigger share of grid layouts (was 0.15)
 CLOSEUP_PROB = 0.15    # single card filling >70% of the frame, possibly clipped
 SLEEVE_PROB = 0.30     # sleeve overlay (glare, specular, colored border) per card
 DISTRACTOR_PROB = 0.4
-HORIZONTAL_FLIP_PROB = 0.5
+# No horizontal flip: real cards never appear mirror-flipped in a camera feed,
+# and flipping would also break the keypoint convention (idx 0 = TL of card
+# art) since the flip swaps which sprite corner sits at pixel (0, 0).
 VIGNETTE_PROB = 0.3
 COLOR_JITTER_PROB = 0.4
 NUM_WORKERS = max(1, (os.cpu_count() or 1) - 1)
@@ -146,6 +150,70 @@ def get_distractors(_cache: list[str] = []) -> list[str]:
     if not _cache:
         _cache.extend(load_distractor_paths())
     return _cache
+
+
+# Alpha threshold for considering a pixel part of the card.
+# Pillow's WebP encoder leaves a few semi-transparent pixels around rounded
+# corners; anything above ~16/255 is safely opaque content.
+_ALPHA_THRESHOLD = 16
+
+
+def _trim_card_to_alpha(card_img: np.ndarray) -> np.ndarray:
+    """
+    Crops a card image down to the bounding box of its visible (opaque) pixels.
+
+    The source WebP cards are tight scans but can include a 1-3% transparent
+    margin around the rounded corners. Training labels are derived from the
+    rectangle [0,0]-[cw,ch] of the loaded image, so any transparent margin
+    becomes "fake card" area in the pose label ground truth. Trimming the
+    image to its alpha content guarantees the labeled rectangle matches the
+    visible card edges as closely as possible.
+
+    Arguments:
+        card_img: BGR or BGRA card image.
+
+    Returns:
+        The card image cropped to its opaque content. If the input has no
+        alpha channel, it is returned unchanged.
+    """
+    if card_img.ndim != 3 or card_img.shape[2] < 4:
+        return card_img
+
+    alpha = card_img[:, :, 3]
+    mask = alpha > _ALPHA_THRESHOLD
+    if not mask.any():
+        return card_img
+
+    ys = np.nonzero(mask.any(axis=1))[0]
+    xs = np.nonzero(mask.any(axis=0))[0]
+    y0, y1 = int(ys[0]), int(ys[-1]) + 1
+    x0, x1 = int(xs[0]), int(xs[-1]) + 1
+
+    # Skip the copy when the bbox already matches the full image.
+    if y0 == 0 and x0 == 0 and y1 == card_img.shape[0] and x1 == card_img.shape[1]:
+        return card_img
+    return card_img[y0:y1, x0:x1].copy()
+
+
+def _load_card(path: str) -> np.ndarray | None:
+    """
+    Loads a card image and trims it to its alpha bounding box.
+
+    Centralized loader so every code path that places a card on a background
+    gets the same tight-cropped input — keeping pose labels consistent with
+    the visible card geometry.
+
+    Arguments:
+        path: Absolute path to a card image file.
+
+    Returns:
+        A BGR/BGRA numpy array trimmed to visible content, or None if the
+        file cannot be read.
+    """
+    img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    if img is None:
+        return None
+    return _trim_card_to_alpha(img)
 
 
 def generate_gradient_background(size: int, dark: bool = False) -> np.ndarray:
@@ -763,12 +831,42 @@ def apply_jpeg_artifacts(image: np.ndarray) -> np.ndarray:
     return decoded if decoded is not None else image
 
 
-def _parse_label_centers(labels: list[str]) -> list[tuple[float, float]]:
+def _corners_to_pose_label(corners: list[tuple[float, float]]) -> str:
     """
-    Extracts normalized center coordinates from OBB label strings.
+    Builds a YOLO-pose label string from 4 normalized card corners.
+
+    The output format is: `0 cx cy w h x1 y1 x2 y2 x3 y3 x4 y4` where
+    cx/cy/w/h is the axis-aligned bounding box enclosing the corners,
+    and (x1..y4) are the 4 keypoints in TL, TR, BR, BL order — all
+    normalized to [0, 1].
 
     Arguments:
-        labels: The OBB label strings in YOLO format.
+        corners: 4 (x, y) corner tuples in normalized image space.
+
+    Returns:
+        The pose label string with 13 whitespace-separated tokens.
+    """
+    xs = [c[0] for c in corners]
+    ys = [c[1] for c in corners]
+    cx = sum(xs) / 4
+    cy = sum(ys) / 4
+    x_min, x_max = min(xs), max(xs)
+    y_min, y_max = min(ys), max(ys)
+    w = x_max - x_min
+    h = y_max - y_min
+    kpts = " ".join(f"{c[0]:.6f} {c[1]:.6f}" for c in corners)
+    return f"0 {cx:.6f} {cy:.6f} {w:.6f} {h:.6f} {kpts}"
+
+
+def _parse_label_centers(labels: list[str]) -> list[tuple[float, float]]:
+    """
+    Extracts normalized center coordinates from pose label strings.
+
+    In the pose format the center is the second and third tokens
+    (`class cx cy w h x1 y1 ... x4 y4`), so no averaging is needed.
+
+    Arguments:
+        labels: The pose label strings in YOLO format.
 
     Returns:
         A list of (cx, cy) tuples in normalized coordinates.
@@ -776,9 +874,8 @@ def _parse_label_centers(labels: list[str]) -> list[tuple[float, float]]:
     centers = []
     for label in labels:
         parts = label.split()
-        if len(parts) >= 9:
-            coords = [float(parts[i]) for i in range(1, 9)]
-            centers.append((sum(coords[0::2]) / 4, sum(coords[1::2]) / 4))
+        if len(parts) >= 3:
+            centers.append((float(parts[1]), float(parts[2])))
     return centers
 
 
@@ -839,7 +936,7 @@ def apply_cutout(image: np.ndarray, labels: list[str]) -> np.ndarray:
 
     Arguments:
         image: The input image as a numpy array.
-        labels: The OBB label strings used to locate card centers.
+        labels: The pose label strings used to locate card centers.
 
     Returns:
         The image with cutout patches, or the original if skipped.
@@ -946,13 +1043,14 @@ def place_card_on_bg(
     scale: float,
     pos_x: float,
     pos_y: float,
-    flip_horizontal: bool = False
 ) -> tuple[np.ndarray, list[tuple[float, float]] | None]:
     """
-    Places a scaled, rotated, and optionally flipped card on a background.
+    Places a scaled and rotated card on a background.
 
     Handles perspective distortion, alpha compositing, and computes the
-    four OBB corner coordinates in normalized image space.
+    four keypoint corner coordinates in normalized image space. Keypoints
+    follow the original card-art orientation: idx 0 = TL of art, idx 1 = TR,
+    idx 2 = BR, idx 3 = BL.
 
     Arguments:
         bg: The background image to place the card on.
@@ -961,12 +1059,11 @@ def place_card_on_bg(
         scale: The scale factor relative to background height.
         pos_x: The horizontal position (0-1, normalized).
         pos_y: The vertical position (0-1, normalized).
-        flip_horizontal: Whether to mirror the card horizontally.
 
     Returns:
-        A tuple of (modified_background, obb_corners) where obb_corners
-        is a list of 4 corner points in normalized coordinates, or None
-        if the card doesn't fit.
+        A tuple of (modified_background, corners) where corners is a
+        list of 4 keypoint corner points in normalized coordinates, or
+        None if the card doesn't fit.
     """
     h_bg, w_bg = bg.shape[:2]
 
@@ -978,10 +1075,6 @@ def place_card_on_bg(
         return bg, None
 
     card_resized = cv2.resize(card_img, (new_w, new_h), interpolation=cv2.INTER_AREA)
-
-    # Horizontal flip
-    if flip_horizontal:
-        card_resized = cv2.flip(card_resized, 1)
 
     # Add alpha channel if missing
     if card_resized.shape[2] == 3:
@@ -1043,7 +1136,29 @@ def place_card_on_bg(
     off_x = int(pos_x * w_bg - new_bw / 2)
     off_y = int(pos_y * h_bg - new_bh / 2)
 
-    # Check if card fits (at least partially)
+    # Final corners in normalized background coordinates. We compute these BEFORE
+    # alpha compositing so we can reject the placement (without mutating bg) if
+    # any corner falls outside the frame. The previous version clamped corners
+    # to [0, 1] which produced degenerate, non-rectangular pose labels for
+    # partially-visible cards — YOLO-pose then learned inconsistent keypoints,
+    # which is the root cause of the "cuts corners / grabs background" symptom.
+    final_corners = []
+    for rc in rotated_corners:
+        fx = (rc[0] + off_x) / w_bg
+        fy = (rc[1] + off_y) / h_bg
+        final_corners.append((fx, fy))
+
+    # Require all 4 corners inside the frame. A small epsilon allows tiny
+    # rounding without rejecting otherwise-valid placements.
+    eps = 1e-3
+    if not all(-eps <= fx <= 1 + eps and -eps <= fy <= 1 + eps for fx, fy in final_corners):
+        return bg, None
+
+    # Clamp the (already valid) corners to [0, 1] to absorb the epsilon.
+    final_corners = [(max(0.0, min(1.0, fx)), max(0.0, min(1.0, fy))) for fx, fy in final_corners]
+
+    # Check if card fits (at least partially) — should always pass given the
+    # corner check above, but keep as a defensive guard.
     if off_x + new_bw < 0 or off_y + new_bh < 0 or off_x >= w_bg or off_y >= h_bg:
         return bg, None
 
@@ -1070,22 +1185,6 @@ def place_card_on_bg(
     blended = (rgb * alpha + bg_region * (1 - alpha)).astype(np.uint8)
     bg[dst_y1:dst_y2, dst_x1:dst_x2] = blended
 
-    # Final corners in normalized background coordinates
-    final_corners = []
-    for rc in rotated_corners:
-        fx = (rc[0] + off_x) / w_bg
-        fy = (rc[1] + off_y) / h_bg
-        final_corners.append((fx, fy))
-
-    # Verify enough of the card is visible. Allow clipping (e.g. close-ups at scale > 1
-    # or cards on the edge of large grids) as long as at least 2 corners are in-frame.
-    inside = sum(1 for fx, fy in final_corners if 0 <= fx <= 1 and 0 <= fy <= 1)
-    if inside < 2:
-        return bg, None
-
-    # Clamp corners to valid range
-    final_corners = [(max(0.0, min(1.0, fx)), max(0.0, min(1.0, fy))) for fx, fy in final_corners]
-
     return bg, final_corners
 
 
@@ -1108,9 +1207,9 @@ def _place_single_card(
 
     Returns:
         A tuple of (modified_bg, corners_or_None, position) where corners
-        is a list of 4 OBB corner points or None if placement failed.
+        is a list of 4 keypoint corner points or None if placement failed.
     """
-    card_img = cv2.imread(card_path, cv2.IMREAD_UNCHANGED)
+    card_img = _load_card(card_path)
     if card_img is None:
         return bg, None, (0.0, 0.0)
 
@@ -1119,7 +1218,6 @@ def _place_single_card(
 
     angle = random.uniform(*ROTATION_RANGE)
     scale = random.uniform(CARD_SCALE_MIN, CARD_SCALE_MAX)
-    flip = random.random() < HORIZONTAL_FLIP_PROB
 
     # Position: try to avoid overlap
     px, py = 0.5, 0.5
@@ -1132,7 +1230,7 @@ def _place_single_card(
         ):
             break
 
-    bg, corners = place_card_on_bg(bg, card_img, angle, scale, px, py, flip)
+    bg, corners = place_card_on_bg(bg, card_img, angle, scale, px, py)
     return bg, corners, (px, py)
 
 
@@ -1147,8 +1245,8 @@ def generate_grid_image(card_paths: list[str]) -> tuple[np.ndarray, list[str]]:
         card_paths: List of absolute paths to card images.
 
     Returns:
-        A tuple of (image, labels) where labels is a list of OBB
-        label strings in YOLO format.
+        A tuple of (image, labels) where labels is a list of pose
+        label strings in YOLO keypoint format.
     """
     bg = generate_random_background(OUTPUT_SIZE)
     bg = add_lighting_gradient(bg)
@@ -1178,7 +1276,7 @@ def generate_grid_image(card_paths: list[str]) -> tuple[np.ndarray, list[str]]:
         for c in range(cols):
             if idx >= len(selected):
                 break
-            card_img = cv2.imread(selected[idx], cv2.IMREAD_UNCHANGED)
+            card_img = _load_card(selected[idx])
             idx += 1
             if card_img is None:
                 continue
@@ -1192,15 +1290,13 @@ def generate_grid_image(card_paths: list[str]) -> tuple[np.ndarray, list[str]]:
 
             # Small angle jitter (-5 to 5 degrees)
             angle = random.uniform(-5, 5)
-            flip = random.random() < HORIZONTAL_FLIP_PROB
 
-            bg, corners = place_card_on_bg(bg, card_img, angle, scale, px, py, flip)
+            bg, corners = place_card_on_bg(bg, card_img, angle, scale, px, py)
             if corners is None:
                 continue
 
             card_corners_for_shadows.append(corners)
-            coords = " ".join(f"{c[0]:.6f} {c[1]:.6f}" for c in corners)
-            labels.append(f"0 {coords}")
+            labels.append(_corners_to_pose_label(corners))
 
     if random.random() < SHADOW_PROB:
         for corners in card_corners_for_shadows:
@@ -1218,25 +1314,25 @@ def generate_closeup_image(card_paths: list[str]) -> tuple[np.ndarray, list[str]
     """
     Generates an image with a single card filling most of the frame.
 
-    Picks a scale between 0.85 and 1.30 of the frame height. When the scale
-    exceeds 1.0 the card is intentionally placed so a corner gets clipped by
-    the image edge — this teaches the YOLO model to keep detecting cards that
-    are too close to the camera to fit fully in view (one of the failure modes
-    listed in the README TODO).
+    Picks a tight scale (0.75-0.92) and a small rotation, then tries a few
+    positions until the rotated card fits fully inside the frame. Fully-visible
+    cards are required because the rest of the pipeline now rejects any
+    placement with corners outside [0,1] — clamping those corners produced
+    inconsistent pose labels that hurt localization precision.
 
     Arguments:
         card_paths: List of absolute paths to card images.
 
     Returns:
-        A tuple of (image, labels) where labels is a list of OBB
-        label strings in YOLO format.
+        A tuple of (image, labels) where labels is a list of pose
+        label strings in YOLO keypoint format.
     """
     bg = generate_random_background(OUTPUT_SIZE)
     bg = add_lighting_gradient(bg)
     bg = add_distractor_objects(bg)
 
     card_path = random.choice(card_paths)
-    card_img = cv2.imread(card_path, cv2.IMREAD_UNCHANGED)
+    card_img = _load_card(card_path)
     if card_img is None:
         # Fallback to a regular image to avoid producing an empty sample
         return generate_image(card_paths, use_mosaic=False)
@@ -1244,31 +1340,24 @@ def generate_closeup_image(card_paths: list[str]) -> tuple[np.ndarray, list[str]
     if random.random() < SLEEVE_PROB:
         card_img = apply_sleeve_overlay(card_img)
 
-    # Scale > 1 means the card is taller than the frame → clipped by edges.
-    scale = random.uniform(0.85, 1.30)
-    angle = random.uniform(-25, 25)  # closeups rarely have extreme rotation
-    flip = random.random() < HORIZONTAL_FLIP_PROB
+    angle = random.uniform(-20, 20)  # closeups rarely have extreme rotation
 
-    # Bias position toward edges when oversized, otherwise keep it centered-ish.
-    if scale > 1.0:
-        # Push the center past the image boundary so a corner is clipped
-        margin = 0.15
-        px = random.choice([random.uniform(-margin, 0.4), random.uniform(0.6, 1 + margin)])
-        py = random.uniform(0.25, 0.75) if random.random() < 0.5 else random.choice(
-            [random.uniform(-margin, 0.4), random.uniform(0.6, 1 + margin)]
-        )
-    else:
-        px = random.uniform(0.4, 0.6)
-        py = random.uniform(0.4, 0.6)
-
-    bg, corners = place_card_on_bg(bg, card_img, angle, scale, px, py, flip)
+    # Try a few scale/position combos until one fits fully. We start near the
+    # max and back off if rotation pushes a corner out of frame.
+    corners = None
+    for attempt in range(6):
+        scale = random.uniform(0.75, 0.92) - attempt * 0.03
+        px = random.uniform(0.45, 0.55)
+        py = random.uniform(0.45, 0.55)
+        bg, corners = place_card_on_bg(bg, card_img, angle, scale, px, py)
+        if corners is not None:
+            break
 
     labels: list[str] = []
     if corners is not None:
         if random.random() < SHADOW_PROB:
             bg = add_card_shadow(bg, corners)
-        coords = " ".join(f"{c[0]:.6f} {c[1]:.6f}" for c in corners)
-        labels.append(f"0 {coords}")
+        labels.append(_corners_to_pose_label(corners))
 
     bg = augment_color(bg)
     bg = add_vignette(bg)
@@ -1291,8 +1380,8 @@ def generate_image(card_paths: list[str], use_mosaic: bool = False) -> tuple[np.
         use_mosaic: Whether mosaic generation is allowed.
 
     Returns:
-        A tuple of (image, labels) where labels is a list of OBB
-        label strings in YOLO format.
+        A tuple of (image, labels) where labels is a list of pose
+        label strings in YOLO keypoint format.
     """
 
     if use_mosaic and random.random() < MOSAIC_PROB:
@@ -1327,9 +1416,8 @@ def generate_image(card_paths: list[str], use_mosaic: bool = False) -> tuple[np.
         occupied.append(pos)
         card_corners_for_shadows.append(corners)
 
-        # OBB format: class x1 y1 x2 y2 x3 y3 x4 y4
-        coords = " ".join(f"{c[0]:.6f} {c[1]:.6f}" for c in corners)
-        labels.append(f"0 {coords}")
+        # Pose format: class cx cy w h x1 y1 x2 y2 x3 y3 x4 y4
+        labels.append(_corners_to_pose_label(corners))
 
     # Add shadows (render before color augmentation for realism)
     if random.random() < SHADOW_PROB:
@@ -1355,7 +1443,7 @@ def _fill_mosaic_quadrant(
     Generates a sub-image with cards for one mosaic quadrant.
 
     Creates an independent background, places 1-2 cards, and maps
-    their OBB corners into the full mosaic coordinate space.
+    their keypoint corners into the full mosaic coordinate space.
 
     Arguments:
         card_paths: List of absolute paths to card images.
@@ -1377,7 +1465,7 @@ def _fill_mosaic_quadrant(
     selected = random.sample(card_paths, min(n_cards, len(card_paths)))
 
     for card_path in selected:
-        card_img = cv2.imread(card_path, cv2.IMREAD_UNCHANGED)
+        card_img = _load_card(card_path)
         if card_img is None:
             continue
 
@@ -1386,11 +1474,10 @@ def _fill_mosaic_quadrant(
 
         angle = random.uniform(*ROTATION_RANGE)
         scale = random.uniform(0.25, 0.65)
-        flip = random.random() < HORIZONTAL_FLIP_PROB
 
         sub_bg, corners = place_card_on_bg(
             sub_bg, card_img, angle, scale,
-            random.uniform(0.2, 0.8), random.uniform(0.2, 0.8), flip,
+            random.uniform(0.2, 0.8), random.uniform(0.2, 0.8),
         )
         if corners is None:
             continue
@@ -1400,8 +1487,7 @@ def _fill_mosaic_quadrant(
              max(0.0, min(1.0, (y1 + c[1] * rh) / mosaic_size)))
             for c in corners
         ]
-        coords = " ".join(f"{c[0]:.6f} {c[1]:.6f}" for c in transformed)
-        labels.append(f"0 {coords}")
+        labels.append(_corners_to_pose_label(transformed))
 
     sub_resized = cv2.resize(sub_bg, (rw, rh))
     return sub_resized, labels
@@ -1419,7 +1505,7 @@ def generate_mosaic_image(card_paths: list[str]) -> tuple[np.ndarray, list[str]]
         card_paths: List of absolute paths to card images.
 
     Returns:
-        A tuple of (mosaic_image, labels) with OBB labels in YOLO format.
+        A tuple of (mosaic_image, labels) with pose labels in YOLO keypoint format.
     """
     size = OUTPUT_SIZE
     mosaic = np.zeros((size, size, 3), dtype=np.uint8)
@@ -1565,6 +1651,7 @@ val: val/images
 
 nc: 1
 names: ['card']
+kpt_shape: [4, 2]
 """
     with open(os.path.join(DATASET_DIR, "data.yaml"), "w") as f:
         f.write(yaml_content)

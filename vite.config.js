@@ -17,7 +17,7 @@ export default defineConfig({
         name: 'Riftbound Scanner',
         short_name: 'Riftbound Scanner',
         description: 'Free, offline AI-powered RiftBound TCG card scanner',
-        version: '1.0.0',
+        version: '2.0.0',
         start_url: '/',
         display: 'standalone',
         background_color: '#0a0e17',

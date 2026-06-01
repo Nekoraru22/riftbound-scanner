@@ -8,19 +8,38 @@ export default function SettingsTab({
   modelPreference,
   onUpdateModelPreference,
 }) {
-  const [showNeko, setShowNeko] = useState(false);
+  const [nekoState, setNekoState] = useState('hidden'); // 'hidden' | 'visible' | 'hiding'
+  const nekoStateRef = useRef('hidden');
+  const nekoTimerRef = useRef(null);
   const scrollRef = useRef(null);
+
+  const setNeko = (val) => {
+    nekoStateRef.current = val;
+    setNekoState(val);
+  };
 
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
+
     const onScroll = () => {
-      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 20;
-      setShowNeko(atBottom);
+      const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (dist < 20) {
+        clearTimeout(nekoTimerRef.current);
+        setNeko('visible');
+      } else if (dist > 60 && nekoStateRef.current === 'visible') {
+        clearTimeout(nekoTimerRef.current);
+        setNeko('hiding');
+        nekoTimerRef.current = setTimeout(() => setNeko('hidden'), 400);
+      }
     };
+
     onScroll();
     el.addEventListener('scroll', onScroll, { passive: true });
-    return () => el.removeEventListener('scroll', onScroll);
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      clearTimeout(nekoTimerRef.current);
+    };
   }, []);
 
   return (
@@ -176,7 +195,7 @@ export default function SettingsTab({
             </div>
             <div>
               <p className="text-sm font-display font-bold text-gold-400">RiftBound Scanner</p>
-              <p className="text-[10px] text-rift-500">v1.0.0</p>
+              <p className="text-[10px] text-rift-500">v2.0.0</p>
             </div>
           </div>
 
@@ -206,9 +225,9 @@ export default function SettingsTab({
 
       </div>
 
-      {/* Neko mascot — sitting on top of the bottom tab bar */}
-      {showNeko && (
-        <div className="fixed bottom-16 right-4 pointer-events-none select-none z-10 fade-in">
+      {/* Neko mascot */}
+      {nekoState !== 'hidden' && (
+        <div className={`fixed bottom-16 right-4 pointer-events-none select-none z-10 ${nekoState === 'hiding' ? 'fade-out' : 'fade-in'}`}>
           <img
             src="/images/neko.webp"
             alt=""

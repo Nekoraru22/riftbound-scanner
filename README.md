@@ -25,7 +25,7 @@ A web application for scanning and cataloging RiftBound TCG cards using Computer
 │  2. Generate synthetic backgrounds     │              ▼
 │  3. Place cards with random transforms │  ┌────────────────────────┐
 │  4. Apply augmentation pipeline        │  │  Frontend Card Matcher │
-│  5. Export YOLO OBB dataset            │  │  (color grid cosine    │
+│  5. Export YOLO pose dataset           │  │  (color grid cosine    │
 │                                        │  │   similarity)          │
 └──────────────────┬─────────────────────┘  └────────────────────────┘
                    │
@@ -34,8 +34,8 @@ A web application for scanning and cataloging RiftBound TCG cards using Computer
 │              train.py                  │
 ├────────────────────────────────────────┤
 │  1. Upload dataset to Modal            │
-│  2. Train YOLO11n-OBB on cloud GPU     │
-│  3. Export to TensorFlow.js + ONNX     │
+│  2. Train YOLO11s-pose on cloud GPU    │
+│  3. Export to ONNX                      │
 │  4. Quantize ONNX to int8              │
 │  5. Download models to public/models/  │
 └────────────────────────────────────────┘
@@ -47,8 +47,8 @@ The scanner uses a **dual-layer approach** to scan cards in real time:
 
 | Layer | Model | Question it answers | Details |
 |-------|-------|---------------------|---------|
-| **Detection** | YOLO11n-OBB (768×768) | *Where* is there a card? | Locates cards in the camera frame with oriented bounding boxes (handles any rotation). Single class (`card`), trained on synthetic data. Out-of-focus crops are filtered out via Laplacian variance so background cards don't get matched. |
-| **Identification** | Color grid fingerprint | *Which* card is it? | Crops the detected region to the artwork area (adaptive per card layout), computes a 16×16 color grid with histogram equalization, and finds the best match via cosine similarity. Tests normal, 90°-rotated and horizontally-flipped orientations to handle landscape battlefields and mirrored photos. The user can drag the 4 OBB corners on screen to manually fine-tune the crop — a perspective warp re-runs the matcher with the corrected quad. |
+| **Detection** | YOLO11s-pose (768×768) | *Where* is there a card? | Locates cards in the camera frame and regresses the 4 card corners as keypoints (handles any rotation). Single class (`card`), trained on synthetic data. Out-of-focus crops are filtered out via Laplacian variance so background cards don't get matched. |
+| **Identification** | Color grid fingerprint | *Which* card is it? | Crops the detected region to the artwork area (adaptive per card layout), computes a 16×16 color grid with histogram equalization, and finds the best match via cosine similarity. Tests normal, 90°-rotated and horizontally-flipped orientations to handle landscape battlefields and mirrored photos. The user can drag the 4 corner keypoints on screen to manually fine-tune the crop — a perspective warp re-runs the matcher with the corrected quad. |
 
 YOLO alone doesn't know which card it's looking at — it only finds rectangular card-shaped objects. The color grid matcher then takes each crop and identifies the specific card.
 
@@ -107,7 +107,7 @@ When uploading a multi-card image, the app resizes it to 2048px for YOLO detecti
 
 ### Manual 4-Corner Correction
 
-When YOLO's OBB is off (slight angle error, clipped corner, perspective distortion from photographing at an angle), the user can drag the 4 corner handles on a selected detection to fit the card precisely. The handles appear on whichever detection is selected; dragging any of them deforms the quadrilateral freely — there's no rectangle constraint, so it captures real perspective.
+When YOLO's corner keypoints are off (slight angle error, clipped corner, perspective distortion from photographing at an angle), the user can drag the 4 corner handles on a selected detection to fit the card precisely. The handles appear on whichever detection is selected; dragging any of them deforms the quadrilateral freely — there's no rectangle constraint, so it captures real perspective.
 
 On pointer-up, the app:
 
@@ -139,7 +139,7 @@ Best similarity across the three is used
 
 ## Synthetic Dataset Generation
 
-`data_creator.py` generates a synthetic YOLO OBB training dataset by compositing card images onto randomized backgrounds with heavy augmentation. The goal is to train a model that detects cards in real-world camera frames.
+`data_creator.py` generates a synthetic YOLO pose training dataset by compositing card images onto randomized backgrounds with heavy augmentation. Each card is labeled with its 4 corners as keypoints. The goal is to train a model that detects cards in real-world camera frames and locates their corners precisely.
 
 ```bash
 cd model
@@ -158,11 +158,11 @@ Background Generation          Card Placement              Global Augmentations
 │ - Solid color     │        │ - Random scale   │        │ - Brightness       │
 │ - Gradient        │  ───►  │ - Random rotation│  ───►  │ - Contrast         │
 │ - Perlin noise    │        │ - Perspective    │        │ - Saturation       │
-│ - Blurred noise   │        │ - Horizontal flip│        │ - Hue shift        │
-│ - Two-tone split  │        │ - Shadow casting │        │ - Color jitter     │
-│ - Real texture    │        │ - Overlap avoid  │        │ - Gaussian noise   │
-│ + Lighting grad.  │        │ - Sleeve overlay │        │ - Motion blur      │
-│ + Distractors     │        │ - 1-5 cards      │        │ - JPEG artifacts   │
+│ - Blurred noise   │        │ - Shadow casting │        │ - Hue shift        │
+│ - Two-tone split  │        │ - Overlap avoid  │        │ - Color jitter     │
+│ - Real texture    │        │ - Sleeve overlay │        │ - Gaussian noise   │
+│ + Lighting grad.  │        │ - 1-5 cards      │        │ - Motion blur      │
+│ + Distractors     │        │                  │        │ - JPEG artifacts   │
 └───────────────────┘        └──────────────────┘        │ - Vignette         │
                                                          │ - Cutout           │
                                                          └────────────────────┘
@@ -220,28 +220,29 @@ model/dataset/
 
 | File/Folder | Description |
 | --- | --- |
-| `data.yaml` | YOLO config file. Points to train/val paths, defines class count (`nc: 1`) and class names (`['card']`). Rewritten by `train.py` with remote paths during cloud training. |
+| `data.yaml` | YOLO config file. Points to train/val paths, defines class count (`nc: 1`), class names (`['card']`) and keypoint shape (`kpt_shape: [4, 2]`). Rewritten by `train.py` with remote paths during cloud training. |
 | `train/` | 85% of the dataset. Used by YOLO to learn during training. |
 | `val/` | 15% of the dataset. Used by YOLO during training to measure progress and pick the best checkpoint. |
 | `images/` | Synthetic 768×768 JPG images generated by `data_creator.py`. Each contains 1–30 cards (single card up to a 5×6 grid) on randomized backgrounds. |
-| `labels/` | One `.txt` per image (same name). Each line is one card detection in YOLO OBB format. |
+| `labels/` | One `.txt` per image (same name). Each line is one card detection in YOLO pose format. |
 
-### Label Format (YOLO OBB)
+### Label Format (YOLO pose)
 
 Labels are generated automatically by `data_creator.py` alongside each image. Since the cards are placed synthetically, the script knows the exact position, rotation, and scale of every card it composites — so it writes the corresponding label file with the precise corner coordinates. No manual annotation is needed.
 
-Each line in a label file describes one card with its 4 rotated corner coordinates:
+Each line in a label file describes one card with an axis-aligned bounding box plus its 4 corner keypoints:
 
 ```
-class x1 y1 x2 y2 x3 y3 x4 y4
+class cx cy w h x1 y1 x2 y2 x3 y3 x4 y4
 ```
 
-Example: `0 0.288 0.399 0.508 0.138 0.935 0.434 0.705 0.721`
+Example: `0 0.612 0.418 0.647 0.583 0.288 0.399 0.508 0.138 0.935 0.434 0.705 0.721`
 
 | Field | Meaning |
 | --- | --- |
 | `0` | Class ID (always `0` = card, since there's only one class) |
-| `x1 y1` ... `x4 y4` | The 4 corners of the oriented bounding box, normalized to 0-1 relative to image dimensions. These form a rotated rectangle around the card. |
+| `cx cy w h` | Center, width and height of the axis-aligned bounding box enclosing the 4 corners, normalized to 0-1. |
+| `x1 y1` ... `x4 y4` | The 4 card corners as keypoints, normalized to 0-1, in TL → TR → BR → BL order relative to the card art. `kpt_shape: [4, 2]` means each keypoint carries only `(x, y)` — no visibility flag, since card corners are always considered visible. |
 
 ## Cloud Training
 
@@ -250,20 +251,26 @@ Example: `0 0.288 0.399 0.508 0.138 0.935 0.434 0.705 0.721`
 ```bash
 modal run train.py                  # Upload dataset + train + export + download
 modal run train.py --skip-upload    # Train only (dataset already uploaded)
+modal run train.py --resume         # Resume from last.pt on the volume (runner was killed, etc.)
 modal run train.py --export-only    # Export and download only (already trained)
 ```
 
-Trains a YOLO11n-OBB model on an **A100 GPU** at **`imgsz=768`** for up to **60 epochs** (with `patience=20` early stopping and `cos_lr=True`), exports to both TensorFlow.js and ONNX formats, automatically quantizes the ONNX model to int8 for optimal web performance, and copies all model files to `public/models/` for the web app.
+Trains a YOLO11s-pose model on an **A100 GPU** at **`imgsz=768`** for up to **80 epochs** (with `patience=40` early stopping and `cos_lr=True`), exports to ONNX, automatically quantizes the ONNX model to int8 for optimal web performance, and copies the model files to `public/models/` for the web app.
+
+> **`--resume`**: If the Modal runner is terminated mid-training (spot preemption, timeout, CLI disconnect without `--detach`), the last checkpoint is preserved on the volume. Run with `--resume` to pick up from where it left off — no dataset re-upload needed.
 
 | Setting | Value |
 |---------|-------|
 | GPU | A100 |
 | `imgsz` | 768 (matches `OUTPUT_SIZE` in data_creator and `inputSize` in yoloDetector.js) |
-| `epochs` | 60 with `patience=20` |
-| `batch` | 48 |
+| `task` / `kpt_shape` | `pose` / `[4, 2]` (4 corner keypoints, x/y only) |
+| `epochs` | 80 with `patience=40` |
+| `batch` | 32 |
 | `cos_lr` | True |
-| `close_mosaic` | 10 (last 10 epochs run without mosaic augmentation) |
-| `hsv_v` / `mixup` / `degrees` | 0.6 / 0.2 / 15 |
+| `close_mosaic` | 15 (last ~19% of the schedule runs without mosaic augmentation) |
+| `pose` / `box` / `cls` | 25.0 / 7.5 / 0.3 (keypoint loss weighted high for tight corner localization) |
+| `hsv_v` / `mixup` / `degrees` | 0.6 / 0.2 / 3.0 |
+| `fliplr` / `flipud` | 0.0 / 0.0 (no flips — see dataset notes above) |
 
 Use `--detach` to run training in the background (you can close your terminal or shut down your PC):
 
@@ -276,32 +283,32 @@ modal run train.py --export-only     # Download results later
 
 ## Model Formats & Optimization
 
-The training pipeline automatically generates three optimized model formats:
+The training pipeline automatically generates two optimized ONNX formats:
 
-| Format | Size | Speed | Use Case |
-|--------|------|-------|----------|
-| **TensorFlow.js** | ~6 MB | Baseline | Backward compatibility |
-| **ONNX (float32)** | ~5.5 MB | 1.5-2x faster | Modern browsers with ONNX Runtime |
-| **ONNX (int8)** | ~1.5 MB | 2-4x faster | Best performance, mobile-friendly |
+| Format | Speed | Use Case |
+|--------|-------|----------|
+| **ONNX (float32)** | Baseline | Modern browsers with ONNX Runtime |
+| **ONNX (int8)** | Faster, smaller | Best performance, mobile-friendly |
 
 ```
 Training ──► Export ONNX ──► Quantize int8 ──► Deploy to public/
-best.pt      best.onnx       best_quantized     yolo11n-obb-riftbound-q8.onnx
- 6 MB         5.5 MB          1.4 MB            (75% size reduction)
+best.pt      best.onnx       best_quantized     yolo11s-pose-riftbound-q8.onnx
 ```
 
-No additional steps required — all three formats are ready for use after `modal run train.py`.
+The quantization step prints the actual file sizes and the size reduction it achieved.
+
+No additional steps required — both formats are ready for use after `modal run train.py`.
 
 **Settings UI**: Users can choose between **Normal (Float32)** and **Fast (Int8 Quantized)**. The preference is saved to localStorage and persists across sessions.
 
-**ONNX Runtime Web vs TensorFlow.js**: ONNX is the primary format (1.5-3x faster inference, native int8 support, ~2.5 MB runtime vs ~4-5 MB). TF.js is kept as a fallback for backward compatibility with older deployed models.
+**ONNX Runtime Web**: ONNX is the only exported format (native int8 support, ~2.5 MB runtime). The int8 model is recommended for fast, mobile-friendly inference.
 
 ## Model & Dataset
 
 | Resource | URL |
 |----------|-----|
-| YOLO11n-OBB Model | <https://platform.ultralytics.com/nekoraru22/yolo11n-obb-riftbound> |
-| Training Dataset | <https://platform.ultralytics.com/nekoraru22/datasets/dataset-obb-riftbound> |
+| YOLO11s-pose Model | <https://platform.ultralytics.com/nekoraru22/yolo11s-pose-riftbound> |
+| Training Dataset | <https://platform.ultralytics.com/nekoraru22/datasets/dataset-pose-riftbound> |
 
 ## Project Structure
 
@@ -312,17 +319,17 @@ riftbound-scanner-src/
 │   ├── data_creator.py     # Synthetic dataset generator
 │   ├── train.py            # Cloud training on Modal
 │   ├── riftbound.db        # SQLite database
-│   ├── dataset/            # Generated YOLO OBB dataset
+│   ├── dataset/            # Generated YOLO pose dataset
 │   ├── textures/           # (optional) Real background images
 │   └── distractors/        # (optional) Non-card PNG objects
 ├── public/
 │   ├── cards/              # Optimized card images (WebP)
 │   ├── card-hashes.json    # Color grid feature hashes (768 floats per card)
-│   └── models/             # YOLO models (TF.js, ONNX, ONNX-int8)
+│   └── models/             # YOLO models (ONNX float32, ONNX-int8)
 └── src/
     └── lib/
         ├── cardMatcher.js  # Color grid matching (cosine similarity)
-        └── yoloDetector.js # YOLO11n-OBB inference (ONNX / TF.js)
+        └── yoloDetector.js # YOLO11s-pose inference (ONNX)
 ```
 
 ## Example
@@ -380,9 +387,9 @@ cd model
 python data_creator.py            # Regenerate synthetic dataset locally (CPU)
 modal run --detach train.py       # Upload + train on Modal A100, ~1–2 h
 # When training finishes:
-modal run train.py --export-only  # Download exported ONNX / TF.js to public/models/
+modal run train.py --export-only  # Download exported ONNX to public/models/
 ```
 
 ## TODO
 
-- Improve YOLO model. It detects cards well but struggles with very small cards in grids and close-ups.
+- Improve card identification cards into big plastic sleeves

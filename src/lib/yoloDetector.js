@@ -1,23 +1,19 @@
 /**
- * YOLO11 Nano OBB Detector for RiftBound Cards
+ * YOLO11 Small OBB Detector for RiftBound Cards
  *
- * This module provides the integration layer for a YOLO11 Nano model
- * converted to TensorFlow.js format for Oriented Bounding Box detection.
+ * This module provides the integration layer for a YOLO11 Small model
+ * converted to TensorFlow.js / ONNX format for Oriented Bounding Box detection.
  *
  * In production, the model would be:
- *   1. Trained on card images using Ultralytics YOLO11n-obb
- *   2. Exported to SavedModel format
- *   3. Converted to TF.js using tensorflowjs_converter
- *   4. Loaded at startup for "warming up"
- *
- * For development/demo, this provides a simulated detector that uses
- * basic image analysis to detect card-like rectangles.
+ *   1. Trained on card images using Ultralytics YOLO11s-obb
+ *   2. Exported to ONNX (quantized int8 for web) and SavedModel formats
+ *   3. Loaded at startup for "warming up"
  */
 
 const MODEL_URLS = {
-  normal: '/models/yolo11n-obb-riftbound.onnx',
-  quantized: '/models/yolo11n-obb-riftbound-q8.onnx',
-  tfjs: '/models/yolo11n-obb-riftbound/model.json', // Fallback for backward compatibility
+  normal: '/models/yolo11s-pose-riftbound.onnx',
+  quantized: '/models/yolo11s-pose-riftbound-q8.onnx',
+  tfjs: '/models/yolo11s-obb-riftbound/model.json', // Legacy OBB fallback (no pose tfjs model)
 };
 
 // Detection states
@@ -146,9 +142,10 @@ class YOLODetector {
    *
    * Detection shape:
    * {
-   *   box: { cx, cy, w, h, angle },  // Oriented bounding box
+   *   box: { cx, cy, w, h },         // Axis-aligned bounding box
    *   confidence: number,
-   *   cropCanvas: HTMLCanvasElement   // Cropped & de-rotated card image
+   *   cropCanvas: HTMLCanvasElement,  // Perspective-corrected card image
+   *   keypoints: [[x,y]×4]           // TL, TR, BR, BL corners (pose model only)
    * }
    */
   async detect(source) {
@@ -214,30 +211,38 @@ class YOLODetector {
     const output = results.output0 || results[Object.keys(results)[0]];
     const outputData = output.data;
 
-    // Post-process OBB outputs.
-    // YOLO11 OBB single-class output shape: [1, 6, N] where N depends on imgsz
-    // (8400 at 640, 12096 at 768, …). Derive N from the tensor instead of
-    // hardcoding so the same code works across image sizes.
+    // Post-process pose outputs.
+    // YOLO11 pose single-class output shape: [1, 13, N]
+    // Channels: cx, cy, w, h, conf, kp0x, kp0y, kp1x, kp1y, kp2x, kp2y, kp3x, kp3y
+    // Keypoint order: TL, TR, BR, BL (card-art corners)
     const detections = [];
-    const numDetections = output.dims ? output.dims[output.dims.length - 1] : outputData.length / 6;
+    const numDetections = output.dims ? output.dims[output.dims.length - 1] : outputData.length / 13;
 
     for (let i = 0; i < numDetections; i++) {
       const conf = outputData[4 * numDetections + i];
 
       if (conf >= this.confidenceThreshold) {
-        // Map from letterbox space back to original image coords
+        // Map box from letterbox space back to original image coords
         const cx = (outputData[0 * numDetections + i] - padX) / scale;
         const cy = (outputData[1 * numDetections + i] - padY) / scale;
         const w = outputData[2 * numDetections + i] / scale;
         const h = outputData[3 * numDetections + i] / scale;
-        const angle = outputData[5 * numDetections + i];
 
-        const cropCanvas = this._cropRotated(source, cx, cy, w, h, angle);
+        // Map keypoints from letterbox space back to original image coords
+        const kps = [];
+        for (let k = 0; k < 4; k++) {
+          const kx = (outputData[(5 + k * 2) * numDetections + i] - padX) / scale;
+          const ky = (outputData[(6 + k * 2) * numDetections + i] - padY) / scale;
+          kps.push([kx, ky]);
+        }
+
+        const cropCanvas = this._cropPerspective(source, kps);
 
         detections.push({
-          box: { cx, cy, w, h, angle },
+          box: { cx, cy, w, h },
           confidence: conf,
           cropCanvas,
+          keypoints: kps,
         });
       }
     }
@@ -277,36 +282,42 @@ class YOLODetector {
     const predictions = await this.model.predict(tensor);
     tensor.dispose();
 
-    // Post-process OBB outputs.
-    // YOLO11 OBB single-class output shape: [1, 6, N] where N depends on imgsz
-    // (8400 at 640, 12096 at 768, …). Derive N from the tensor shape.
-    // 6 channels = [cx, cy, w, h, class_score, angle] (nc=1)
+    // Post-process pose outputs.
+    // YOLO11 pose single-class output shape: [1, 13, N]
+    // Channels: cx, cy, w, h, conf, kp0x, kp0y, kp1x, kp1y, kp2x, kp2y, kp3x, kp3y
+    // Keypoint order: TL, TR, BR, BL (card-art corners)
     const predShape = predictions.shape;
     const outputData = await predictions.data();
     predictions.dispose();
 
     const detections = [];
-    const numDetections = predShape ? predShape[predShape.length - 1] : outputData.length / 6;
+    const numDetections = predShape ? predShape[predShape.length - 1] : outputData.length / 13;
 
     for (let i = 0; i < numDetections; i++) {
-      // Data is laid out as [ch0_det0, ch0_det1, ..., ch1_det0, ch1_det1, ...]
-      // Channel 4 = class score (already sigmoid in model), Channel 5 = angle (already radians)
       const conf = outputData[4 * numDetections + i];
 
       if (conf >= this.confidenceThreshold) {
-        // Map from letterbox space back to original image coords
+        // Map box from letterbox space back to original image coords
         const cx = (outputData[0 * numDetections + i] - padX) / scale;
         const cy = (outputData[1 * numDetections + i] - padY) / scale;
         const w = outputData[2 * numDetections + i] / scale;
         const h = outputData[3 * numDetections + i] / scale;
-        const angle = outputData[5 * numDetections + i];
 
-        const cropCanvas = this._cropRotated(source, cx, cy, w, h, angle);
+        // Map keypoints from letterbox space back to original image coords
+        const kps = [];
+        for (let k = 0; k < 4; k++) {
+          const kx = (outputData[(5 + k * 2) * numDetections + i] - padX) / scale;
+          const ky = (outputData[(6 + k * 2) * numDetections + i] - padY) / scale;
+          kps.push([kx, ky]);
+        }
+
+        const cropCanvas = this._cropPerspective(source, kps);
 
         detections.push({
-          box: { cx, cy, w, h, angle },
+          box: { cx, cy, w, h },
           confidence: conf,
           cropCanvas,
+          keypoints: kps,
         });
       }
     }
@@ -359,7 +370,7 @@ class YOLODetector {
         cropCtx.putImageData(imgData, 0, 0);
 
         return [{
-          box: { cx: guideCx, cy: guideCy, w: guideW, h: guideH, angle: 0 },
+          box: { cx: guideCx, cy: guideCy, w: guideW, h: guideH },
           confidence: Math.min(0.95, 0.5 + (variance / 5000) + (edgeDensity * 2)),
           cropCanvas,
         }];
@@ -417,26 +428,75 @@ class YOLODetector {
   }
 
   /**
-   * Crop and de-rotate a detected card from the source
+   * Perspective-correct crop of a card using its 4 corner keypoints.
+   * kps: [[TLx,TLy],[TRx,TRy],[BRx,BRy],[BLx,BLy]] in source image pixels.
+   * Uses horizontal strip affine decomposition — O(STRIPS) canvas operations,
+   * no per-pixel JS loop needed.
    */
-  _cropRotated(source, cx, cy, w, h, angle) {
-    // Rotate full image so card is axis-aligned, then crop card region
-    const diag = Math.sqrt(source.width * source.width + source.height * source.height);
-    const big = document.createElement('canvas');
-    big.width = Math.ceil(diag);
-    big.height = Math.ceil(diag);
-    const bctx = big.getContext('2d');
-    const bcx = big.width / 2;
-    const bcy = big.height / 2;
-    bctx.translate(bcx, bcy);
-    bctx.rotate(-angle);
-    bctx.drawImage(source, -cx, -cy);
+  _cropPerspective(source, kps) {
+    const STRIPS = 48;
+    // Estimate card width/height from keypoints to set output canvas size
+    const [tl, tr, br, bl] = kps;
+    const topW = Math.hypot(tr[0] - tl[0], tr[1] - tl[1]);
+    const botW = Math.hypot(br[0] - bl[0], br[1] - bl[1]);
+    const leftH = Math.hypot(bl[0] - tl[0], bl[1] - tl[1]);
+    const rightH = Math.hypot(br[0] - tr[0], br[1] - tr[1]);
+    const cardW = Math.max(1, Math.round((topW + botW) / 2));
+    const cardH = Math.max(1, Math.round((leftH + rightH) / 2));
 
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.round(w);
-    canvas.height = Math.round(h);
-    canvas.getContext('2d').drawImage(big, bcx - w / 2, bcy - h / 2, w, h, 0, 0, w, h);
-    return canvas;
+    const dst = document.createElement('canvas');
+    dst.width = cardW;
+    dst.height = cardH;
+    const ctx = dst.getContext('2d');
+
+    for (let i = 0; i < STRIPS; i++) {
+      const t0 = i / STRIPS;
+      const t1 = (i + 1) / STRIPS;
+
+      // Interpolate along left edge (TL→BL) and right edge (TR→BR)
+      const lx0 = tl[0] + (bl[0] - tl[0]) * t0, ly0 = tl[1] + (bl[1] - tl[1]) * t0;
+      const rx0 = tr[0] + (br[0] - tr[0]) * t0, ry0 = tr[1] + (br[1] - tr[1]) * t0;
+      const lx1 = tl[0] + (bl[0] - tl[0]) * t1, ly1 = tl[1] + (bl[1] - tl[1]) * t1;
+
+      const dy0 = cardH * t0;
+      const dy1 = cardH * t1;
+
+      // Affine from 3 source→dest correspondences:
+      //   (lx0,ly0)→(0,dy0), (rx0,ry0)→(cardW,dy0), (lx1,ly1)→(0,dy1)
+      const [a, b, c, d, e, f] = this._solveAffine(
+        [lx0, ly0], [rx0, ry0], [lx1, ly1],
+        [0, dy0],   [cardW, dy0], [0, dy1]
+      );
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, dy0, cardW, dy1 - dy0);
+      ctx.clip();
+      ctx.setTransform(a, b, c, d, e, f);
+      ctx.drawImage(source, 0, 0);
+      ctx.restore();
+    }
+
+    return dst;
+  }
+
+  /**
+   * Solve affine transform mapping 3 source points to 3 destination points.
+   * Returns [a, b, c, d, e, f] for ctx.setTransform(a, b, c, d, e, f) such that
+   * source pixel (sx, sy) maps to canvas pixel (a*sx+c*sy+e, b*sx+d*sy+f).
+   */
+  _solveAffine(p0, p1, p2, q0, q1, q2) {
+    const [x0, y0] = p0, [x1, y1] = p1, [x2, y2] = p2;
+    const [u0, v0] = q0, [u1, v1] = q1, [u2, v2] = q2;
+    const det = x0 * (y1 - y2) - y0 * (x1 - x2) + (x1 * y2 - x2 * y1);
+    if (Math.abs(det) < 1e-10) return [1, 0, 0, 1, 0, 0];
+    const a = (u0 * (y1 - y2) - y0 * (u1 - u2) + (u1 * y2 - u2 * y1)) / det;
+    const c = (x0 * (u1 - u2) - u0 * (x1 - x2) + (x1 * u2 - x2 * u1)) / det;
+    const e = (x0 * (y1 * u2 - y2 * u1) - y0 * (x1 * u2 - x2 * u1) + u0 * (x1 * y2 - x2 * y1)) / det;
+    const b = (v0 * (y1 - y2) - y0 * (v1 - v2) + (v1 * y2 - v2 * y1)) / det;
+    const d = (x0 * (v1 - v2) - v0 * (x1 - x2) + (x1 * v2 - x2 * v1)) / det;
+    const f = (x0 * (y1 * v2 - y2 * v1) - y0 * (x1 * v2 - x2 * v1) + v0 * (x1 * y2 - x2 * y1)) / det;
+    return [a, b, c, d, e, f];
   }
 
   /**

@@ -11,8 +11,6 @@ image = (
         "torch",
         "torchvision",
         "opencv-python-headless",
-        "tensorflowjs",
-        "onnx2tf==1.26.3",
         "onnxslim>=0.1.71",
         "sng4onnx>=1.0.1",
         "onnx_graphsurgeon>=0.3.26",
@@ -29,7 +27,7 @@ REMOTE_RUNS_DIR = "/data/runs"
 
 
 @app.local_entrypoint()
-def main(skip_upload: bool = False, export_only: bool = False):
+def main(skip_upload: bool = False, export_only: bool = False, resume: bool = False):
     """
     Uploads the local dataset and launches cloud training on Modal.
 
@@ -40,10 +38,12 @@ def main(skip_upload: bool = False, export_only: bool = False):
     Arguments:
         skip_upload: Skip dataset upload if already on the volume.
         export_only: Only export and download an existing trained model.
+        resume: Resume training from runs/train/weights/last.pt on the volume.
 
     Usage:
         modal run train.py                  # Upload dataset + train
         modal run train.py --skip-upload    # Train only (dataset already uploaded)
+        modal run train.py --resume         # Resume from last.pt on the volume
         modal run train.py --export-only    # Export and download (already trained)
     """
     import pathlib
@@ -54,6 +54,9 @@ def main(skip_upload: bool = False, export_only: bool = False):
         print("Exporting existing model...")
         export_model_fn.remote()
 
+        print("\nQuantizing model...")
+        quantize_model.remote()
+
         print("Downloading results...")
         output_dir = base_dir / "runs"
         output_dir.mkdir(exist_ok=True)
@@ -62,13 +65,15 @@ def main(skip_upload: bool = False, export_only: bool = False):
         _copy_model_to_public(base_dir)
         return
 
-    if not skip_upload:
+    if resume:
+        print("Resuming training from runs/train/weights/last.pt on the volume...")
+    elif not skip_upload:
         _upload_dataset(base_dir)
     else:
         print("Skipping dataset upload (--skip-upload)")
 
     print("Starting training...")
-    train_model.remote()
+    train_model.remote(resume=resume)
 
     # Quantize model
     print("\nQuantizing model...")
@@ -135,7 +140,7 @@ def _upload_dataset(base_dir):
 
 def _copy_model_to_public(base_dir):
     """
-    Copies the exported TF.js and ONNX models to the public web app directory.
+    Copies the exported ONNX models to the public web app directory.
 
     Arguments:
         base_dir: The model directory containing the runs folder.
@@ -145,25 +150,9 @@ def _copy_model_to_public(base_dir):
     weights_dir = base_dir / "runs" / "train" / "weights"
     models_dir = base_dir.parent / "public" / "models"
 
-    # Copy TF.js model
-    tfjs_src = weights_dir / "best_web_model"
-    tfjs_dst = models_dir / "yolo11n-obb-riftbound"
-
-    if not tfjs_src.exists():
-        print(f"TF.js model not found at {tfjs_src}, skipping copy to public/")
-    else:
-        # Clean up old models
-        if models_dir.exists():
-            shutil.rmtree(models_dir)
-            print(f"Cleaned {models_dir}")
-
-        models_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(tfjs_src, tfjs_dst)
-        print(f"TF.js model copied to {tfjs_dst}")
-
     # Copy ONNX model (non-quantized)
     onnx_src = weights_dir / "best.onnx"
-    onnx_dst = models_dir / "yolo11n-obb-riftbound.onnx"
+    onnx_dst = models_dir / "yolo11s-pose-riftbound.onnx"
 
     if not onnx_src.exists():
         print(f"ONNX model not found at {onnx_src}, skipping copy to public/")
@@ -174,7 +163,7 @@ def _copy_model_to_public(base_dir):
 
     # Copy ONNX model (quantized int8)
     onnx_q8_src = weights_dir / "best_quantized.onnx"
-    onnx_q8_dst = models_dir / "yolo11n-obb-riftbound-q8.onnx"
+    onnx_q8_dst = models_dir / "yolo11s-pose-riftbound-q8.onnx"
 
     if not onnx_q8_src.exists():
         print(f"Quantized model not found at {onnx_q8_src}, skipping copy to public/")
@@ -216,11 +205,11 @@ def _download_results(local_dir):
 )
 def export_model_fn():
     """
-    Exports a trained YOLO model to TensorFlow.js and ONNX formats.
+    Exports a trained YOLO model to ONNX format.
 
     Loads the best checkpoint from a previous training run and
-    exports it to both formats. Uses CPU device and opset 12 for
-    maximum compatibility with browser runtimes.
+    exports it to ONNX. Uses CPU device and opset 12 for maximum
+    compatibility with browser runtimes.
     """
     import os
     import subprocess
@@ -234,16 +223,6 @@ def export_model_fn():
 
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = ""
-
-    # Export to TensorFlow.js (for backward compatibility)
-    print("Exporting model to TensorFlow.js...")
-    subprocess.run(
-        [sys.executable, "-c",
-         f"from ultralytics import YOLO; "
-         f"YOLO('{best_path}').export(format='tfjs', imgsz=768, device='cpu', opset=12)"],
-        env=env,
-        check=True,
-    )
 
     # Export to ONNX (non-quantized, for web use with ONNX Runtime)
     print("Exporting model to ONNX...")
@@ -262,16 +241,21 @@ def export_model_fn():
 @app.function(
     image=image,
     gpu="A100",
-    timeout=21600,
+    timeout=36000,
     volumes={"/data": volume},
 )
-def train_model():
+def train_model(resume: bool = False):
     """
-    Trains a YOLO11n-OBB model on a remote Modal GPU.
+    Trains a YOLO11s-pose model on a remote Modal GPU.
 
     Extracts the dataset archive, rewrites data.yaml with remote
-    paths, runs YOLO training, exports the best model to TF.js,
-    and commits the results to the persistent volume.
+    paths, runs YOLO training to regress the 4 card corners as
+    keypoints, exports the best model to ONNX, and commits the
+    results to the persistent volume.
+
+    Arguments:
+        resume: Resume training from runs/train/weights/last.pt instead of
+            starting fresh. Keeps the existing runs/ and dataset/ on the volume.
     """
     import os
     import shutil
@@ -279,82 +263,103 @@ def train_model():
 
     volume.reload()
 
-    # Clean up old training runs
-    if os.path.exists(REMOTE_RUNS_DIR):
-        print(f"Removing old runs at {REMOTE_RUNS_DIR}...")
-        shutil.rmtree(REMOTE_RUNS_DIR)
+    last_pt_path = os.path.join(REMOTE_RUNS_DIR, "train", "weights", "last.pt")
 
-    # Extract dataset from archive
-    archive_path = "/data/dataset.tar.gz"
-    if os.path.exists(archive_path):
-        print(f"Archive found: {archive_path} ({os.path.getsize(archive_path)} bytes)")
-        print("Extracting dataset...")
-        if os.path.exists(REMOTE_DATASET_DIR):
-            shutil.rmtree(REMOTE_DATASET_DIR)
-        os.makedirs(REMOTE_DATASET_DIR, exist_ok=True)
-        shutil.unpack_archive(archive_path, REMOTE_DATASET_DIR)
-        print(f"Contents of {REMOTE_DATASET_DIR}: {os.listdir(REMOTE_DATASET_DIR)}")
+    if resume:
+        if not os.path.exists(last_pt_path):
+            raise FileNotFoundError(
+                f"--resume given but {last_pt_path} not found on the volume."
+            )
+        if not os.path.exists(os.path.join(REMOTE_DATASET_DIR, "train")):
+            raise FileNotFoundError(
+                f"--resume given but dataset not found at {REMOTE_DATASET_DIR}."
+            )
+        print(f"Resuming from {last_pt_path}, keeping existing runs/ and dataset/.")
     else:
-        print(f"Archive not found at {archive_path}")
+        # Clean up old training runs
+        if os.path.exists(REMOTE_RUNS_DIR):
+            print(f"Removing old runs at {REMOTE_RUNS_DIR}...")
+            shutil.rmtree(REMOTE_RUNS_DIR)
 
-    # Verify dataset structure
-    if not os.path.exists(os.path.join(REMOTE_DATASET_DIR, "train")):
-        _print_dataset_debug(REMOTE_DATASET_DIR)
-        raise FileNotFoundError(
-            f"Dataset not found at {REMOTE_DATASET_DIR}. "
-            "Run without --skip-upload to upload the dataset."
+        # Extract dataset from archive
+        archive_path = "/data/dataset.tar.gz"
+        if os.path.exists(archive_path):
+            print(f"Archive found: {archive_path} ({os.path.getsize(archive_path)} bytes)")
+            print("Extracting dataset...")
+            if os.path.exists(REMOTE_DATASET_DIR):
+                shutil.rmtree(REMOTE_DATASET_DIR)
+            os.makedirs(REMOTE_DATASET_DIR, exist_ok=True)
+            shutil.unpack_archive(archive_path, REMOTE_DATASET_DIR)
+            print(f"Contents of {REMOTE_DATASET_DIR}: {os.listdir(REMOTE_DATASET_DIR)}")
+        else:
+            print(f"Archive not found at {archive_path}")
+
+    if resume:
+        # Ultralytics reads all training args from runs/train/args.yaml.
+        model = YOLO(last_pt_path)
+        model.train(resume=True)
+    else:
+        # Verify dataset structure
+        if not os.path.exists(os.path.join(REMOTE_DATASET_DIR, "train")):
+            _print_dataset_debug(REMOTE_DATASET_DIR)
+            raise FileNotFoundError(
+                f"Dataset not found at {REMOTE_DATASET_DIR}. "
+                "Run without --skip-upload to upload the dataset."
+            )
+
+        # Rewrite data.yaml with remote paths.
+        # Label format is YOLO pose: `class cx cy w h x1 y1 x2 y2 x3 y3 x4 y4`,
+        # where (x1..x4, y1..y4) are the 4 card corners in image-normalized
+        # coords. kpt_shape=[4, 2] means 4 keypoints with (x, y) only — no
+        # visibility flag, since card corners are always visible.
+        yaml_path = os.path.join(REMOTE_DATASET_DIR, "data.yaml")
+        with open(yaml_path, "w") as f:
+            f.write(
+                f"path: {REMOTE_DATASET_DIR}\n"
+                "train: train/images\n"
+                "val: val/images\n\n"
+                "nc: 1\n"
+                "names: ['card']\n"
+                "kpt_shape: [4, 2]\n"
+            )
+
+        # Train. yolo11s-pose regresses the 4 card corners as keypoints, which
+        # gives sub-pixel corner localization that an OBB head can't match.
+        # Quantizes well to int8 ONNX (~10 MB on disk) for the browser. A100
+        # fits batch 32 at imgsz=768.
+        model = YOLO("yolo11s-pose.pt")
+        model.train(
+            data=yaml_path,
+            epochs=80,             # realistic schedule for a single-class pose head
+            imgsz=768,
+            batch=32,              # A100 80GB fits 32 of yolo11s-pose at 768
+            device=0,
+            task="pose",
+            project=REMOTE_RUNS_DIR,
+            name="train",
+            exist_ok=True,
+            patience=40,           # early-stop if val plateaus
+            hsv_v=0.6,
+            mixup=0.2,
+            degrees=3.0,
+            fliplr=0.0,
+            flipud=0.0,
+            pose=25.0,
+            box=7.5,
+            cls=0.3,
+            close_mosaic=15,       # clean fine-tune phase (~last 19% of the schedule)
+            cos_lr=True,           # cosine LR schedule plays well with longer runs
         )
 
-    # Rewrite data.yaml with remote paths
-    yaml_path = os.path.join(REMOTE_DATASET_DIR, "data.yaml")
-    with open(yaml_path, "w") as f:
-        f.write(
-            f"path: {REMOTE_DATASET_DIR}\n"
-            "train: train/images\n"
-            "val: val/images\n\n"
-            "nc: 1\n"
-            "names: ['card']\n"
-        )
-
-    # Train
-    model = YOLO("yolo11n-obb.pt")
-    model.train(
-        data=yaml_path,
-        epochs=60,
-        imgsz=768,
-        batch=48,             # A100 has 40-80GB, fits 48 at 768
-        device=0,
-        task="obb",
-        project=REMOTE_RUNS_DIR,
-        name="train",
-        exist_ok=True,
-        patience=20,          # early-stop if val plateaus
-        hsv_v=0.6,
-        mixup=0.2,
-        degrees=15,
-        close_mosaic=10,      # disable mosaic in the last 10 epochs for cleaner final fit
-        cos_lr=True,          # cosine LR schedule plays well with longer runs
-    )
-
-    # Export to both TensorFlow.js and ONNX in a subprocess with GPU hidden.
-    # CUDA_VISIBLE_DEVICES must be set before TF is imported, so we
-    # can't do it in-process since PyTorch already initialized CUDA.
+    # Export to ONNX in a subprocess with the GPU hidden, to keep the export
+    # path identical across CUDA and CPU runs.
     import subprocess
     import sys
 
     best_path = os.path.join(REMOTE_RUNS_DIR, "train", "weights", "best.pt")
 
-    # Export to TensorFlow.js (for backward compatibility)
-    print("Exporting model to TensorFlow.js...")
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = ""
-    subprocess.run(
-        [sys.executable, "-c",
-         f"from ultralytics import YOLO; "
-         f"YOLO('{best_path}').export(format='tfjs', imgsz=768, device='cpu', opset=12)"],
-        env=env,
-        check=True,
-    )
 
     # Export to ONNX (non-quantized, for web use with ONNX Runtime)
     print("Exporting model to ONNX...")
