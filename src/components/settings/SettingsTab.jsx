@@ -195,7 +195,7 @@ export default function SettingsTab({
             </div>
             <div>
               <p className="text-sm font-display font-bold text-gold-400">RiftBound Scanner</p>
-              <p className="text-[10px] text-rift-500">v2.0.0</p>
+              <p className="text-[10px] text-rift-500">v2.1.0</p>
             </div>
           </div>
 

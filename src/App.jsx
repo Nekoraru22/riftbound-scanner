@@ -9,7 +9,7 @@ import SettingsTab from './components/settings/SettingsTab.jsx';
 import { useCamera } from './hooks/useCamera.js';
 import { useCardDetection } from './hooks/useCardDetection.js';
 import { useAutoScan } from './hooks/useAutoScan.js';
-import { downloadCSV, validateForExport } from './lib/csvExporter.js';
+import { downloadCSV, validateForExport, getFormat, DEFAULT_FORMAT } from './lib/exporters/index.js';
 import { getMatcher } from './lib/cardMatcher.js';
 import { isFoilOnly } from './data/sampleCards.js';
 
@@ -408,16 +408,16 @@ export default function App() {
   }, [showNotification]);
 
   // ─── CSV Export ────────────────────────────────────────────
-  const handleExport = useCallback(() => {
+  const handleExport = useCallback((format = DEFAULT_FORMAT) => {
     const { valid, errors } = validateForExport(scannedCards);
     if (!valid) {
       showNotification(`Error: ${errors[0]}`, 'error');
       return;
     }
 
-    const success = downloadCSV(scannedCards);
+    const success = downloadCSV(scannedCards, format);
     if (success) {
-      showNotification(`CSV exported — ${scannedCards.length} cards`, 'success');
+      showNotification(`${getFormat(format).label} exported — ${scannedCards.length} cards`, 'success');
     }
   }, [scannedCards, showNotification]);
 

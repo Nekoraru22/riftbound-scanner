@@ -392,4 +392,5 @@ modal run train.py --export-only  # Download exported ONNX to public/models/
 
 ## TODO
 
-- Improve card identification cards into big plastic sleeves
+- [ ] Add real user photos to the dataset for better generalization (currently only synthetic)
+- [ ] Improve card identification cards into big plastic sleeves

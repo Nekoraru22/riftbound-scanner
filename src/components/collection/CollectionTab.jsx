@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
-import { Download, Trash2, Layers, Search, X } from 'lucide-react';
+import { Download, Trash2, Layers, Search, X, ChevronDown } from 'lucide-react';
 import ScannerCardRow from '../scanner/ScannerCardRow.jsx';
+import { EXPORT_FORMATS } from '../../lib/exporters/index.js';
 
 export default function CollectionTab({
   scannedCards,
@@ -10,6 +11,7 @@ export default function CollectionTab({
   onExport,
 }) {
   const [searchQuery, setSearchQuery] = useState('');
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
 
   // Filter cards based on search query
   const filteredCards = useMemo(() => {
@@ -68,14 +70,40 @@ export default function CollectionTab({
                 : 'No cards yet'
             )}
           </span>
-          <button
-            onClick={onExport}
-            disabled={scannedCards.length === 0}
-            className="btn-primary text-xs py-2 px-4 rounded-xl"
-          >
-            <Download className="w-4 h-4" />
-            CSV
-          </button>
+          <div className="relative">
+            <button
+              onClick={() => setExportMenuOpen((open) => !open)}
+              disabled={scannedCards.length === 0}
+              className="btn-primary text-xs py-2 px-4 rounded-xl"
+            >
+              <Download className="w-4 h-4" />
+              CSV
+              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${exportMenuOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {exportMenuOpen && (
+              <>
+                {/* Click-away backdrop */}
+                <button
+                  className="fixed inset-0 z-10 cursor-default"
+                  aria-label="Close export menu"
+                  onClick={() => setExportMenuOpen(false)}
+                />
+                <div className="absolute right-0 mt-2 z-20 w-52 bg-rift-800 border border-rift-600/40 rounded-xl shadow-xl overflow-hidden">
+                  {EXPORT_FORMATS.map((format, i) => (
+                    <button
+                      key={format.id}
+                      onClick={() => { setExportMenuOpen(false); onExport(format.id); }}
+                      className={`w-full text-left px-4 py-2.5 hover:bg-rift-700 transition-colors ${i > 0 ? 'border-t border-rift-700/60' : ''}`}
+                    >
+                      <div className="text-xs font-semibold text-rift-100">{format.label}</div>
+                      <div className="text-[10px] text-rift-400 mt-0.5">{format.description}</div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
           <button
             onClick={onClearAll}
             disabled={scannedCards.length === 0}

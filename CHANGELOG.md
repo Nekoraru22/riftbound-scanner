@@ -1,5 +1,46 @@
 # Changelog
 
+## [2.1.0] - 2026-06-12
+
+### Riftmana Export + Pluggable Export Formats
+
+Added a second CSV export format for the [Riftmana](https://riftmana.com/) deckbuilder, and refactored the exporter into a small per-format registry so new formats are easy to add.
+
+#### New Features
+
+- **Riftmana CSV export**
+  - Columns: `Card ID, Normal, Foil` (e.g. `OGN-001,4,0`)
+  - Card ID is `${set}-${collectorNumber}`, preserving letter suffixes (`OGN-003a`) and `*` star variants (`OGN-299*`) verbatim — unlike the CardNexus format which strips the asterisk
+  - Cards are grouped by Card ID; standard and foil copies of the same card collapse into a single row with separate Normal/Foil counts
+  - Filename suffixed with `-riftmana`
+
+- **Export format menu**
+  - The Collection tab "CSV" button is now a dropdown offering both **CardNexus / PowerTools** and **Riftmana**
+  - Rendered from the format registry, so new formats appear automatically
+
+#### Refactor — pluggable export formats
+
+`src/lib/csvExporter.js` was split into `src/lib/exporters/`, one file per format plus a registry. Adding a format is just dropping in a new file and registering it on one line:
+
+```text
+src/lib/exporters/
+├── index.js       # registry: EXPORT_FORMATS, downloadCSV, validateForExport, getFormat
+├── csvUtils.js    # shared escapeCSV/titleCase + ExportFormat/ScannedCard typedefs
+├── cardnexus.js   # CardNexus / PowerTools descriptor (incl. Runes/Type/Rarity columns)
+└── riftmana.js    # Riftmana descriptor
+```
+
+Each format default-exports a descriptor (`id`, `label`, `description`, `filenameSuffix`, `generate`). `downloadCSV(cards, formatId)` resolves the format from the registry and falls back to the default for unknown ids.
+
+#### Files Modified
+
+| File | What changed |
+|------|-------------|
+| `src/lib/exporters/*` | New: per-format modules + registry (replaces `src/lib/csvExporter.js`) |
+| `src/components/collection/CollectionTab.jsx` | Export button replaced with a format-picker dropdown rendered from `EXPORT_FORMATS` |
+| `src/App.jsx` | `handleExport` accepts the chosen format; toast label comes from the registry |
+| `src/components/scan/ScanTab.jsx` | Updated import path to `lib/exporters/` |
+
 ## [2.0.0] - 2026-06-02
 
 ### YOLO11s-pose — Corner Keypoint Detection

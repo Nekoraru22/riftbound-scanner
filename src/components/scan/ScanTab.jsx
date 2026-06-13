@@ -7,7 +7,7 @@ import DetectionCanvas, { DETECTION_COLORS } from '../identify/DetectionCanvas.j
 import CardDetailPanel from '../identify/CardDetailPanel.jsx';
 import { getDetector } from '../../lib/yoloDetector.js';
 import { getMatcher } from '../../lib/cardMatcher.js';
-import { downloadCSV, validateForExport } from '../../lib/csvExporter.js';
+import { downloadCSV, validateForExport } from '../../lib/exporters/index.js';
 import { warpQuadToPortrait } from '../../lib/perspectiveCrop.js';
 
 // --- Card matching utilities ---
